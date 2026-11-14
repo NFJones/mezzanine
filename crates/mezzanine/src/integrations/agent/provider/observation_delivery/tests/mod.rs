@@ -151,7 +151,10 @@ async fn all_provider_purposes_wait_for_exact_original_actor_acknowledgment() {
     for purpose in [
         ProviderRequestPurpose::Execution,
         ProviderRequestPurpose::Routing,
-        ProviderRequestPurpose::Auxiliary,
+        ProviderRequestPurpose::Title,
+        ProviderRequestPurpose::MacroJudge,
+        ProviderRequestPurpose::SandboxAssessment,
+        ProviderRequestPurpose::FailureSummary,
         ProviderRequestPurpose::Compaction,
         ProviderRequestPurpose::Memory,
     ] {
@@ -238,7 +241,10 @@ async fn all_provider_purposes_receiver_loss_wakes_wait_and_preserves_failure() 
     for purpose in [
         ProviderRequestPurpose::Execution,
         ProviderRequestPurpose::Routing,
-        ProviderRequestPurpose::Auxiliary,
+        ProviderRequestPurpose::Title,
+        ProviderRequestPurpose::MacroJudge,
+        ProviderRequestPurpose::SandboxAssessment,
+        ProviderRequestPurpose::FailureSummary,
         ProviderRequestPurpose::Compaction,
         ProviderRequestPurpose::Memory,
     ] {
@@ -288,7 +294,10 @@ async fn all_purposes_cancelled_ack_waits_retain_original_evidence() {
     for purpose in [
         ProviderRequestPurpose::Execution,
         ProviderRequestPurpose::Routing,
-        ProviderRequestPurpose::Auxiliary,
+        ProviderRequestPurpose::Title,
+        ProviderRequestPurpose::MacroJudge,
+        ProviderRequestPurpose::SandboxAssessment,
+        ProviderRequestPurpose::FailureSummary,
         ProviderRequestPurpose::Compaction,
         ProviderRequestPurpose::Memory,
     ] {
@@ -344,7 +353,10 @@ async fn all_purposes_acknowledged_then_closed_consumer_cannot_admit_next_call()
     for purpose in [
         ProviderRequestPurpose::Execution,
         ProviderRequestPurpose::Routing,
-        ProviderRequestPurpose::Auxiliary,
+        ProviderRequestPurpose::Title,
+        ProviderRequestPurpose::MacroJudge,
+        ProviderRequestPurpose::SandboxAssessment,
+        ProviderRequestPurpose::FailureSummary,
         ProviderRequestPurpose::Compaction,
         ProviderRequestPurpose::Memory,
     ] {

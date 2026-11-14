@@ -120,10 +120,10 @@ impl AttemptSource {
             BudgetAttemptPurpose::Routing => Purpose::Routing,
             BudgetAttemptPurpose::Compaction => Purpose::Compaction,
             BudgetAttemptPurpose::Memory => Purpose::Memory,
-            BudgetAttemptPurpose::Title
-            | BudgetAttemptPurpose::MacroJudge
-            | BudgetAttemptPurpose::SandboxAssessment
-            | BudgetAttemptPurpose::FailureSummary => Purpose::Auxiliary,
+            BudgetAttemptPurpose::Title => Purpose::Title,
+            BudgetAttemptPurpose::MacroJudge => Purpose::MacroJudge,
+            BudgetAttemptPurpose::SandboxAssessment => Purpose::SandboxAssessment,
+            BudgetAttemptPurpose::FailureSummary => Purpose::FailureSummary,
         };
         if observation.conversation_id != original.conversation
             || observation.provider != original.model.provider

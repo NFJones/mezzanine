@@ -163,8 +163,11 @@ async fn budget_auxiliary_actual_memory_http_retains_original_custody_until_join
         .unwrap()
         .unwrap();
     let member = dispatch.budget_owner.as_ref().unwrap().member.clone();
+    publish_unlimited_policy(&store, &member).await;
     let (sender, _observations) = tokio::sync::mpsc::channel(8);
-    let observer = ProviderWireRequestObserver::new(member.conversation.clone(), "%1", sender);
+    let pending = PendingProviderWireObservations::default();
+    let observer = ProviderWireRequestObserver::new(member.conversation.clone(), "%1", sender)
+        .with_pending_observations(pending.clone());
     let request = tokio::spawn(execute_runtime_agent_remember_dispatch(dispatch, observer));
     let request_guard = AbortProviderWorkerOnDrop(request.abort_handle());
     let (mut socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
@@ -200,6 +203,9 @@ async fn budget_auxiliary_actual_memory_http_retains_original_custody_until_join
         refused,
         "issued auxiliary future must retain original native custody"
     );
+    // The journal now retains cancellation evidence after the actual join.
+    // Retiring the entire isolated fixture releases that source, not exposure.
+    drop(pending);
     let successor = store
         .publish_native_budget_membership(&transcripts, &member, "auxiliary-successor", None)
         .unwrap();
@@ -239,12 +245,14 @@ async fn qualify_http_custody(unwind: bool) {
         .unwrap()
         .unwrap()
         .0;
+    publish_unlimited_policy(&store, &member).await;
     let (sender, _observations) = tokio::sync::mpsc::channel(8);
+    let pending = PendingProviderWireObservations::default();
     let request = tokio::spawn(execute_runtime_agent_provider_dispatch(
         dispatch,
         None,
         sender,
-        Default::default(),
+        pending.clone(),
     ));
     let request_guard = AbortProviderWorkerOnDrop(request.abort_handle());
     let (mut socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
@@ -296,6 +304,7 @@ async fn qualify_http_custody(unwind: bool) {
         refused,
         "actor destruction alone cannot retire HTTP custody"
     );
+    drop(pending);
     let successor = store
         .publish_native_budget_membership(&transcripts, &member, "successor", None)
         .unwrap();
@@ -309,4 +318,36 @@ async fn qualify_http_custody(unwind: bool) {
     );
     drop((successor, socket, listener));
     root.cleanup();
+}
+
+/// Native admission needs a real validated config projection even when both
+/// limits are unlimited. This is generated fixture policy, not a bypass.
+async fn publish_unlimited_policy(
+    store: &TokenUsageStore,
+    member: &crate::storage::token_usage::budget::membership::BudgetMembership,
+) {
+    use crate::storage::token_usage::budget::policy_projection::{
+        BudgetConfigPolicy, BudgetPolicyPublication,
+    };
+    let operation = BudgetPolicyPublication {
+        namespace: member.namespace.clone(),
+        id: mez_agent::token_budget::BudgetReceiptId::new("custody-policy").unwrap(),
+        expected_revision: 0,
+        previous_digest: "a".repeat(64),
+        proposed: BudgetConfigPolicy {
+            source: "primary".into(),
+            digest: "b".repeat(64),
+            limits: Default::default(),
+        },
+        supersedes: None,
+    };
+    let store = store.clone();
+    tokio::task::spawn_blocking(move || {
+        store.begin_budget_policy_publication(&operation).unwrap();
+        store
+            .reconcile_budget_policy_publication(&operation, &operation.proposed.digest)
+            .unwrap();
+    })
+    .await
+    .unwrap();
 }

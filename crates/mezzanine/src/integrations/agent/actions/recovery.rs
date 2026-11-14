@@ -440,7 +440,13 @@ pub(super) async fn summarize_controller_failure_execution_async<P: AsyncModelPr
         &[],
     );
     loop {
-        let response = match provider.send_request_async(negotiation.request()).await {
+        let response = match provider
+            .send_request_async_for_purpose(
+                negotiation.request(),
+                crate::integrations::agent::provider::ProviderRequestPurpose::FailureSummary,
+            )
+            .await
+        {
             Ok(response) => response,
             Err(error) => {
                 progress.observe(error.provider_incurred_usage(), None, &[]);

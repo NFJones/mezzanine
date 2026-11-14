@@ -3,11 +3,11 @@
 //! The existing journal retains this factory before awaiting the original
 //! blocking admission worker. A new permit is consumed once at the adapter's
 //! transport boundary. Cancellation/reconciliation never reconstruct permission.
-//! Receipt-only factories remain separate descriptive ports. This staged factory
-//! is not installed by production dispatch yet; fairness, reversible root holds,
-//! complete counter coverage and all-purpose assembly remain required. Qualified
-//! scoped retirement commits a separate terminal receipt after subtotals, with
-//! unknown dimensions unless independent final unary evidence qualifies them.
+//! Receipt-only factories remain separate descriptive ports. Configured dispatch
+//! installs this source only when it already owns activated budget membership;
+//! production membership activation, fairness and reversible holds remain staged.
+//! Qualified scoped retirement commits a separate terminal receipt after subtotals,
+//! with unknown dimensions unless independent dialect evidence qualifies them.
 
 use super::*;
 use crate::integrations::agent::provider::{
@@ -23,31 +23,13 @@ use std::sync::{Arc, Mutex};
 /// Frozen request-local allocation, not another attempt ledger. The existing
 /// context serializes planning and its journal retains each allocated source.
 /// No descriptor is reconstructed from a result or shared with a later retry.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "production assembly remains staged")
-)]
 pub(super) struct BudgetRequestAdmission {
     owner: RuntimeBudgetRequestOwner,
-    model: mez_agent::ModelTokenUsageKey,
-    purpose: crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose,
 }
 
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "production assembly remains staged")
-)]
 impl BudgetRequestAdmission {
-    pub(super) fn new(
-        owner: RuntimeBudgetRequestOwner,
-        model: mez_agent::ModelTokenUsageKey,
-        purpose: crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose,
-    ) -> Self {
-        Self {
-            owner,
-            model,
-            purpose,
-        }
+    pub(super) fn new(owner: RuntimeBudgetRequestOwner) -> Self {
+        Self { owner }
     }
 }
 
@@ -57,10 +39,38 @@ impl ProviderObservationReceiptSource for BudgetRequestAdmission {
         observation: &ProviderWireRequestObservation,
     ) -> Result<Arc<dyn ProviderObservationReceiptFactory>> {
         self.owner.validate_request(&observation.conversation_id)?;
-        let work = self
-            .owner
-            .prepare_attempt(self.model.clone(), self.purpose)?;
+        use crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose as Purpose;
+        let purpose = match observation.purpose {
+            ProviderRequestPurpose::Execution => Purpose::Execution,
+            ProviderRequestPurpose::Routing => Purpose::Routing,
+            ProviderRequestPurpose::Compaction => Purpose::Compaction,
+            ProviderRequestPurpose::Memory => Purpose::Memory,
+            ProviderRequestPurpose::Title => Purpose::Title,
+            ProviderRequestPurpose::MacroJudge => Purpose::MacroJudge,
+            ProviderRequestPurpose::SandboxAssessment => Purpose::SandboxAssessment,
+            ProviderRequestPurpose::FailureSummary => Purpose::FailureSummary,
+        };
+        // The code-owned pre-send observation freezes this actual request, not
+        // a worker's router/execution profile or the provider-reported model.
+        let work = self.owner.prepare_attempt(
+            mez_agent::ModelTokenUsageKey::new(&observation.provider, &observation.model),
+            purpose,
+        )?;
         Ok(Arc::new(BudgetAttemptAdmission::new(work)))
+    }
+}
+
+/// Install before any logical request; the existing observer journal owns every
+/// allocated exchange through producer retirement. Absence preserves the
+/// unactivated path, never manufactures a fresh accounting root or fallback.
+pub(super) fn install_request_source(
+    observer: ProviderWireRequestObserver,
+    owner: Option<&RuntimeBudgetRequestOwner>,
+) -> Result<ProviderWireRequestObserver> {
+    match owner {
+        Some(owner) => observer
+            .with_budget_receipt_source(Arc::new(BudgetRequestAdmission::new(owner.clone()))),
+        None => Ok(observer),
     }
 }
 

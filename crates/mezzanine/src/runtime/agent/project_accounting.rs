@@ -124,7 +124,10 @@ impl RuntimeSessionService {
         else {
             return;
         };
-        if observation.purpose != ProviderRequestPurpose::Execution {
+        if !matches!(
+            observation.purpose,
+            ProviderRequestPurpose::Execution | ProviderRequestPurpose::FailureSummary
+        ) {
             return;
         }
         let Some(owner) = self

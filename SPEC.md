@@ -16716,6 +16716,14 @@ An installed request-owned receipt source MUST allocate a distinct original
 descriptor for each concrete exchange, including adapter-internal retries. The
 plan and journal MUST retain the exact selected factory before authorization;
 finalization and cancellation MUST NOT allocate or substitute another factory.
+Configured ordinary and auxiliary dispatch with a captured native budget owner
+MUST install that source before provider work. Each descriptor MUST capture the
+actual request's provider/model and exact code-owned operation purpose, never a
+worker-profile guess or provider-reported response model. Title, macro judgment,
+sandbox assessment and failure summary MUST retain distinct typed purposes even
+when their diagnostic category remains `auxiliary`. Failure-summary repair calls
+MUST retain their summary purpose after the interaction kind changes to repair.
+Missing ownership MUST NOT manufacture a root or silently activate budgeting.
 An internal retry MUST wait for the prior durable receipt AND actor handoff
 before allocating its next descriptor. Refusal of that fresh admission MUST
 preserve prior known expense and MUST NOT poll another transport. Unlimited

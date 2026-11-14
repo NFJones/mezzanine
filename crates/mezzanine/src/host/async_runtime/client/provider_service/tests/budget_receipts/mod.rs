@@ -3,6 +3,7 @@
 //! staged bridge does not claim production activation or retirement release.
 
 mod admission;
+mod dispatch;
 mod internal_retry;
 mod pre_send;
 mod retirement;
@@ -171,7 +172,10 @@ async fn case(purpose: BudgetAttemptPurpose) -> Case {
 }
 
 fn rows(store: &TokenUsageStore, table: &str) -> i64 {
-    assert!(matches!(table, "budget_receipts" | "budget_admissions"));
+    assert!(matches!(
+        table,
+        "budget_receipts" | "budget_admissions" | "budget_attempts"
+    ));
     rusqlite::Connection::open(store.path())
         .unwrap()
         .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
@@ -378,21 +382,18 @@ async fn budget_wire_receipts_all_purposes_commit_before_real_actor_ack() {
             ProviderRequestPurpose::Compaction,
         ),
         (BudgetAttemptPurpose::Memory, ProviderRequestPurpose::Memory),
-        (
-            BudgetAttemptPurpose::Title,
-            ProviderRequestPurpose::Auxiliary,
-        ),
+        (BudgetAttemptPurpose::Title, ProviderRequestPurpose::Title),
         (
             BudgetAttemptPurpose::MacroJudge,
-            ProviderRequestPurpose::Auxiliary,
+            ProviderRequestPurpose::MacroJudge,
         ),
         (
             BudgetAttemptPurpose::SandboxAssessment,
-            ProviderRequestPurpose::Auxiliary,
+            ProviderRequestPurpose::SandboxAssessment,
         ),
         (
             BudgetAttemptPurpose::FailureSummary,
-            ProviderRequestPurpose::Auxiliary,
+            ProviderRequestPurpose::FailureSummary,
         ),
     ] {
         qualify(

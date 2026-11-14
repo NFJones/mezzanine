@@ -144,11 +144,7 @@ async fn qualify(limits: BudgetLimits, allowed: bool) {
     request.allowed_actions =
         mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let factory = Arc::new(CountedSource {
-        inner: BudgetRequestAdmission::new(
-            dispatch.budget_owner.as_ref().unwrap().clone(),
-            mez_agent::ModelTokenUsageKey::new(&request.provider, &request.model),
-            BudgetAttemptPurpose::Execution,
-        ),
+        inner: BudgetRequestAdmission::new(dispatch.budget_owner.as_ref().unwrap().clone()),
         allocations: AtomicUsize::new(0),
         store: store.clone(),
     });

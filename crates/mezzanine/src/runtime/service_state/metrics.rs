@@ -1003,7 +1003,7 @@ mod provider_wire_tests {
 
         let mut auxiliary = execution.clone();
         auxiliary.request_id = "wire-auxiliary".to_string();
-        auxiliary.purpose = ProviderRequestPurpose::Auxiliary;
+        auxiliary.purpose = ProviderRequestPurpose::Title;
         auxiliary.usage = Some(ModelTokenUsage {
             input_tokens: 20,
             cached_input_tokens: Some(0),
@@ -1061,7 +1061,7 @@ mod provider_wire_tests {
             "namespace-00000",
             "openai",
             &request,
-            ProviderRequestPurpose::Auxiliary,
+            ProviderRequestPurpose::Title,
             None,
         );
         for index in 0..=PROVIDER_WIRE_DIAGNOSTIC_SCOPE_LIMIT {

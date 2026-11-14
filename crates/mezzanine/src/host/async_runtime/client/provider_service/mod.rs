@@ -2522,6 +2522,13 @@ async fn execute_runtime_agent_provider_dispatch(
     )
     .with_claim_generation(claim_generation)
     .with_pending_observations(pending_observations);
+    let execution_observer =
+        budget_admission::install_request_source(execution_observer, _budget_owner.as_ref())?;
+    let auxiliary_purpose = if sandbox_failure_assessment_request.is_some() {
+        ProviderRequestPurpose::SandboxAssessment
+    } else {
+        ProviderRequestPurpose::MacroJudge
+    };
     if let Some(mut request) = sandbox_failure_assessment_request.or(macro_judge_request) {
         request.allowed_actions = allowed_actions.clone().ok_or_else(|| {
             MezError::invalid_state("auxiliary request is missing its session action catalog")
@@ -2529,7 +2536,7 @@ async fn execute_runtime_agent_provider_dispatch(
         let response = observed_dispatch_provider_request(
             &provider,
             &execution_observer,
-            ProviderRequestPurpose::Auxiliary,
+            auxiliary_purpose,
             &request,
         )
         .await?;
@@ -2641,6 +2648,7 @@ async fn execute_runtime_agent_compaction_dispatch(
     if let Some(owner) = &_budget_owner {
         owner.validate_request(&task.conversation_id)?;
     }
+    let observer = budget_admission::install_request_source(observer, _budget_owner.as_ref())?;
     let source = task.replay_source.as_ref().ok_or_else(|| {
         MezError::invalid_state("compaction dispatch lacks its frozen epoch source")
     })?;
@@ -2701,6 +2709,7 @@ async fn execute_runtime_agent_remember_dispatch(
     if let Some(owner) = &_budget_owner {
         owner.validate_request(&task.conversation_id)?;
     }
+    let observer = budget_admission::install_request_source(observer, _budget_owner.as_ref())?;
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
             observed_provider_request(
@@ -2766,8 +2775,16 @@ async fn execute_runtime_agent_session_title_dispatch(
     session_title_response_outcome(
         observed_dispatch_provider_request(
             &provider,
-            &observer,
-            ProviderRequestPurpose::Auxiliary,
+            &match budget_admission::install_request_source(observer, _budget_owner.as_ref()) {
+                Ok(observer) => observer,
+                Err(_) => {
+                    return (
+                        AgentSessionTitleOutcome::Rejected("provider_error".into()),
+                        Default::default(),
+                    );
+                }
+            },
+            ProviderRequestPurpose::Title,
             &task.request,
         )
         .await,
@@ -3021,7 +3038,7 @@ mod tests {
             let response = observed_provider_request(
                 &TitleProvider(text),
                 &observer,
-                ProviderRequestPurpose::Auxiliary,
+                ProviderRequestPurpose::Title,
                 &request,
             )
             .await;

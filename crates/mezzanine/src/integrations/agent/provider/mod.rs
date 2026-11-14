@@ -568,12 +568,18 @@ pub enum ProviderRequestPurpose {
     Execution,
     /// Automatic model or reasoning-profile selection.
     Routing,
-    /// Internal macro, sandbox, or failure-assessment work.
-    Auxiliary,
     /// Model-backed conversation compaction.
     Compaction,
     /// Model-backed durable-memory generation.
     Memory,
+    /// Generated display title under its original auxiliary owner.
+    Title,
+    /// Code-owned macro step judgment, including its repair attempts.
+    MacroJudge,
+    /// Code-owned sandbox failure classification.
+    SandboxAssessment,
+    /// Failure characterization, including output/MAAP repair retries.
+    FailureSummary,
 }
 
 impl ProviderRequestPurpose {
@@ -582,7 +588,9 @@ impl ProviderRequestPurpose {
         match self {
             Self::Execution => "execution",
             Self::Routing => "routing",
-            Self::Auxiliary => "auxiliary",
+            Self::Title | Self::MacroJudge | Self::SandboxAssessment | Self::FailureSummary => {
+                "auxiliary"
+            }
             Self::Compaction => "compaction",
             Self::Memory => "memory",
         }
@@ -1810,6 +1818,17 @@ pub trait AsyncModelProvider: Send + Sync {
         request: &'a ModelRequest,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>;
 
+    /// Select an internal logical operation before its retries change the
+    /// request interaction kind. Plain providers need no observation behavior;
+    /// observed adapters retain the exact code-owned purpose for every send.
+    fn send_request_async_for_purpose<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        _purpose: ProviderRequestPurpose,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        self.send_request_async(request)
+    }
+
     /// Sends one request while reporting ordered visible streaming say events.
     fn send_request_async_with_progress<'a>(
         &'a self,
@@ -1888,6 +1907,18 @@ impl<P: AsyncModelProvider> AsyncModelProvider for ObservedAsyncModelProvider<'_
         request: &'a ModelRequest,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         self.send_request_async_with_progress(request, None)
+    }
+
+    fn send_request_async_for_purpose<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        purpose: ProviderRequestPurpose,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            ObservedAsyncModelProvider::new(self.provider, self.observer, purpose)
+                .send_request_async(request)
+                .await
+        })
     }
 
     fn send_request_async_with_progress<'a>(

@@ -103,6 +103,15 @@ exchange's known usage without making another transport call. Missing counters
 remain unknown, not zero. Receipt acknowledgment is not proof that issued
 provider exposure has retired.
 
+Configured dispatch attaches the native source whenever its original budget
+owner is present. Each exchange freezes its actual request provider/model and
+code-owned purpose rather than borrowing the worker profile or response model.
+Title, macro judgment, sandbox assessment and failure summary stay distinct in
+the budget ledger; their diagnostic category remains `auxiliary`. Failure-summary
+output/MAAP repair rounds keep the summary purpose. This connection does not
+enable production membership or supply fair budget waiting, root-wide effect
+inhibition, live policy publication or user controls; those remain staged.
+
 Native async sends also retain evidence that their exact local transport future
 and active callback futures were destroyed, including on cancellation. This transfer
 precedes normal receipt capture; it does not establish remote completion,

@@ -2190,7 +2190,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
 
     let auxiliary = observation(
         "wire-auxiliary",
-        crate::integrations::agent::provider::ProviderRequestPurpose::Auxiliary,
+        crate::integrations::agent::provider::ProviderRequestPurpose::Title,
         Some(mez_agent::ModelTokenUsage {
             input_tokens: 10,
             cached_input_tokens: Some(0),
@@ -2260,7 +2260,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
     for purpose in [
         crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
         crate::integrations::agent::provider::ProviderRequestPurpose::Routing,
-        crate::integrations::agent::provider::ProviderRequestPurpose::Auxiliary,
+        crate::integrations::agent::provider::ProviderRequestPurpose::Title,
     ] {
         let mut stale = observation("wire-stale", purpose, None);
         stale.turn_id = "stale-turn".to_string();
