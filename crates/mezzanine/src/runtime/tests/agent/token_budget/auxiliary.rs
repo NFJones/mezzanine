@@ -297,6 +297,98 @@ fn setup() -> (Scene, mez_core::ids::ClientId, String) {
     (scene, primary, conversation)
 }
 
+/// Failed optional admission may allocate an attempt locally, but rollback must
+/// clear it. A genuine later reclaim keeps its dispatch/member while assigning
+/// another attempt; the predecessor's positive hold is expense custody only.
+#[tokio::test]
+async fn runtime_budget_auxiliary_title_reclaim_cannot_borrow_predecessor_hold() {
+    use crate::runtime::RuntimeBudgetAttemptAdmission;
+    use crate::storage::token_usage::budget::admission::BudgetAdmissionHold;
+    use crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose;
+    let (mut scene, _primary, conversation) = setup();
+    scene
+        .service
+        .schedule_runtime_agent_session_title(
+            &conversation,
+            Some("Qualify exact claimed title attempt"),
+        )
+        .unwrap();
+    let dispatch = scene
+        .service
+        .pending_agent_session_title_dispatch_id(&conversation)
+        .unwrap()
+        .to_owned();
+    prepare(
+        &mut scene,
+        &RuntimeBudgetAuxiliarySource::Title {
+            conversation: conversation.clone(),
+            dispatch: dispatch.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    scene.service.set_title_accounting_limit_for_tests(0);
+    let refused = scene
+        .service
+        .claim_agent_session_title_dispatch(&conversation, &dispatch)
+        .unwrap()
+        .is_none();
+    let rolled_back = scene
+        .service
+        .pending_agent_session_title_dispatch_id(&conversation)
+        == Some(dispatch.as_str())
+        && scene
+            .service
+            .claimed_agent_session_title_task_ids()
+            .is_empty();
+    // Capacity one also proves the failed claim retained no accounting slot;
+    // no private-map inspection or production visibility change is required.
+    scene.service.set_title_accounting_limit_for_tests(1);
+    let first = scene
+        .service
+        .claim_agent_session_title_dispatch(&conversation, &dispatch)
+        .unwrap()
+        .unwrap();
+    let owner = first.budget_owner.as_ref().unwrap();
+    let work = owner
+        .prepare_attempt(
+            mez_agent::ModelTokenUsageKey::new("openai", "gpt-test"),
+            BudgetAttemptPurpose::Title,
+        )
+        .unwrap();
+    let admission = work.admission_owner();
+    let outcome = admission.claim().await.unwrap();
+    let held = admission.capture_held().await.unwrap();
+    // Actual no-I/O rollback, not task retirement or worker cancellation.
+    scene
+        .service
+        .restore_pending_agent_session_title_task(first.task.clone());
+    let second = scene
+        .service
+        .claim_agent_session_title_dispatch(&conversation, &dispatch)
+        .unwrap()
+        .unwrap();
+    let successor = second.budget_owner.as_ref().unwrap();
+    let isolated = first.task.attempt_id != second.task.attempt_id
+        && first.task.dispatch_id == second.task.dispatch_id
+        && owner.member == successor.member
+        && held.matches_owner(owner)
+        && held.matches_owner(&owner.clone())
+        && !held.matches_owner(successor);
+    let inert = rusqlite::Connection::open(scene.store.path()).unwrap().query_row(
+        "SELECT (SELECT COUNT(*) FROM budget_attempts) + (SELECT COUNT(*) FROM budget_receipts) + (SELECT COUNT(*) FROM budget_admissions)",
+        [], |row| row.get::<_, i64>(0),
+    ).unwrap() == 0;
+    drop((held, admission, work, first, second));
+    drop(scene); // Retire exact native fixture and verify root removal before assertions.
+    assert!(refused && rolled_back);
+    assert!(matches!(
+        outcome,
+        RuntimeBudgetAttemptAdmission::Held(BudgetAdmissionHold::PolicyUnavailable)
+    ));
+    assert!(isolated && inert);
+}
+
 async fn prepare(scene: &mut Scene, source: &RuntimeBudgetAuxiliarySource) -> Result<()> {
     let work = scene
         .service
