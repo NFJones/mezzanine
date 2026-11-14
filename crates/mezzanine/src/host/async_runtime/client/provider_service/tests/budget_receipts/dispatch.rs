@@ -12,11 +12,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 async fn budget_production_dispatch_fences_zero_before_physical_send() {
     for case in [
         RequestCase::Execution,
+        RequestCase::Router,
+        RequestCase::Compaction,
+        RequestCase::Memory,
+        RequestCase::Title,
         RequestCase::Macro,
         RequestCase::Sandbox,
         RequestCase::SummaryRepair,
     ] {
-        qualify(0, case).await;
+        Box::pin(qualify(0, case)).await;
     }
 }
 
@@ -24,17 +28,25 @@ async fn budget_production_dispatch_fences_zero_before_physical_send() {
 async fn budget_production_dispatch_registers_actual_request_before_physical_send() {
     for case in [
         RequestCase::Execution,
+        RequestCase::Router,
+        RequestCase::Compaction,
+        RequestCase::Memory,
+        RequestCase::Title,
         RequestCase::Macro,
         RequestCase::Sandbox,
         RequestCase::SummaryRepair,
     ] {
-        qualify(100, case).await;
+        Box::pin(qualify(100, case)).await;
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 enum RequestCase {
     Execution,
+    Router,
+    Compaction,
+    Memory,
+    Title,
     Macro,
     Sandbox,
     SummaryRepair,
@@ -42,7 +54,11 @@ enum RequestCase {
 
 impl RequestCase {
     fn model(self) -> &'static str {
-        if matches!(self, Self::Macro | Self::Sandbox) {
+        if matches!(self, Self::Router) {
+            "router-request-model"
+        } else if matches!(self, Self::Compaction) {
+            "test-model"
+        } else if matches!(self, Self::Macro | Self::Sandbox) {
             "auxiliary-request-model"
         } else {
             "actual-request-model"
@@ -52,6 +68,10 @@ impl RequestCase {
     fn purposes(self) -> Vec<&'static str> {
         match self {
             Self::Execution => vec!["Execution"],
+            Self::Router => vec!["Routing"],
+            Self::Compaction => vec!["Compaction"],
+            Self::Memory => vec!["Memory"],
+            Self::Title => vec!["Title"],
             Self::Macro => vec!["MacroJudge"],
             Self::Sandbox => vec!["SandboxAssessment"],
             Self::SummaryRepair => vec!["Execution", "FailureSummary", "FailureSummary"],
@@ -61,7 +81,7 @@ impl RequestCase {
 
 async fn qualify(input_limit: u64, case: RequestCase) {
     let Prepared {
-        service,
+        mut service,
         mut dispatch,
         store,
         member,
@@ -83,6 +103,29 @@ async fn qualify(input_limit: u64, case: RequestCase) {
             .unwrap()
             .with_endpoint(endpoint),
     );
+    if matches!(case, RequestCase::Router) {
+        let target = |size: &str| mez_agent::AutoSizingTargetProfile {
+            size: size.into(),
+            profile_name: size.into(),
+            profile: dispatch.model_profile.clone(),
+            supported_reasoning_efforts: vec!["high".into()],
+        };
+        let mut router_profile = dispatch.model_profile.clone();
+        router_profile.model = case.model().into();
+        dispatch.auto_sizing = Some(mez_agent::AutoSizingDispatch {
+            router_profile_name: "fixture-router".into(),
+            router_profile,
+            default_profile_name: "default".into(),
+            default_profile: dispatch.model_profile.clone(),
+            small: target("small"),
+            medium: target("medium"),
+            large: target("large"),
+            turn_metadata: None,
+            allowed_reasoning_efforts: vec!["high".into()],
+            fallback_policy: mez_agent::AutoSizingFallbackPolicy::UseDefaultProfile,
+        });
+        dispatch.auto_sizing_provider = Some(dispatch.provider.clone());
+    }
     if matches!(case, RequestCase::Macro | RequestCase::Sandbox) {
         let mut request = crate::integrations::agent::context::assemble_model_request(
             &dispatch.model_profile,
@@ -98,6 +141,134 @@ async fn qualify(input_limit: u64, case: RequestCase) {
         } else {
             request.interaction_kind = mez_agent::ModelInteractionKind::SandboxFailureAssessment;
             dispatch.sandbox_failure_assessment_request = Some(request);
+        }
+    }
+    // Queue and claim the real turn-less operation; do not borrow the ordinary
+    // dispatch's owner to manufacture auxiliary authority.
+    let mut memory = None;
+    let mut title = None;
+    let mut compaction = None;
+    if matches!(
+        case,
+        RequestCase::Compaction | RequestCase::Memory | RequestCase::Title
+    ) {
+        let primary = service
+            .session()
+            .clients()
+            .iter()
+            .find(|client| service.session().is_attached_primary(&client.id))
+            .unwrap()
+            .id
+            .clone();
+        service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+        service.set_config_root(store.path().parent().unwrap().to_owned());
+        let source = if matches!(case, RequestCase::Compaction) {
+            use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
+            service.replace_config_layers(vec![ConfigLayer {
+                name: "budget-compaction-capacity".into(), path: None,
+                format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+                text: "[agents]\nrouting=false\nshell_mode=\"native\"\ndefault_provider=\"local-chat\"\ndefault_model_profile=\"default\"\n[permissions]\nsandbox=\"policy-only\"\n[providers.local-chat]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:1/v1\"\nmodels=[\"test-model\"]\ndefault_model=\"test-model\"\n[model_profiles.default]\nprovider=\"local-chat\"\nmodel=\"test-model\"\ncontext_window_tokens=40000\n".into(),
+            }]).unwrap();
+            // Physical transcript rows alone do not make a live canonical
+            // task eligible. Complete genuine work and admit its successor.
+            let turn = crate::test_support::compaction_source::complete_task_and_admit_successor(
+                &mut service,
+                &primary,
+                &format!("earlier public source {}", "evidence ".repeat(6_000)),
+                "original completed evidence",
+                "continue after compaction",
+                mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+            );
+            let error = MezError::invalid_state("provider context length exceeded")
+                .with_provider_failure_json(
+                    r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+                );
+            service
+                .schedule_agent_provider_retry_transition(
+                    &AgentId::opaque("agent-%1").unwrap(),
+                    &turn,
+                    ProviderErrorRetryClass::ContextLimit,
+                    &error,
+                )
+                .unwrap()
+                .unwrap();
+            crate::runtime::RuntimeBudgetAuxiliarySource::Compaction {
+                pane: "%1".into(),
+                generation: service
+                    .pending_agent_compaction_task_generation("%1")
+                    .unwrap(),
+            }
+        } else if matches!(case, RequestCase::Memory) {
+            service
+                .execute_agent_shell_command(&primary, "/remember Preserve original accounting.")
+                .unwrap();
+            crate::runtime::RuntimeBudgetAuxiliarySource::Remember {
+                pane: "%1".into(),
+                observation: service
+                    .pending_agent_remember_observation_id("%1")
+                    .unwrap()
+                    .into(),
+            }
+        } else {
+            // The original prompt queued a title before test-only membership
+            // activation. Retire that unissued task; a fresh queue captures
+            // the real auxiliary membership instead of borrowing its owner.
+            service.cancel_agent_session_title_task(&member.conversation);
+            service
+                .schedule_runtime_agent_session_title(
+                    &member.conversation,
+                    Some("Qualify original title accounting"),
+                )
+                .unwrap();
+            crate::runtime::RuntimeBudgetAuxiliarySource::Title {
+                conversation: member.conversation.clone(),
+                dispatch: service
+                    .pending_agent_session_title_dispatch_id(&member.conversation)
+                    .unwrap()
+                    .into(),
+            }
+        };
+        let work = service
+            .prepare_runtime_budget_auxiliary(&source)
+            .unwrap()
+            .unwrap();
+        let prepared = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+        service.apply_agent_provider_preparation(prepared).unwrap();
+        match source {
+            crate::runtime::RuntimeBudgetAuxiliarySource::Remember { pane, observation } => {
+                let mut claimed = service
+                    .claim_agent_remember_task(&pane, &observation)
+                    .unwrap()
+                    .unwrap();
+                claimed.provider = dispatch.provider.clone();
+                claimed.task.request.model = case.model().into();
+                assert_eq!(claimed.budget_owner.as_ref().unwrap().member, member);
+                memory = Some(claimed);
+            }
+            crate::runtime::RuntimeBudgetAuxiliarySource::Title {
+                conversation,
+                dispatch: id,
+            } => {
+                let mut claimed = service
+                    .claim_agent_session_title_dispatch(&conversation, &id)
+                    .unwrap()
+                    .unwrap();
+                claimed.provider = dispatch.provider.clone();
+                claimed.task.request.model = case.model().into();
+                assert_eq!(claimed.budget_owner.as_ref().unwrap().member, member);
+                title = Some(claimed);
+            }
+            crate::runtime::RuntimeBudgetAuxiliarySource::Compaction { pane, generation } => {
+                let mut claimed = service
+                    .claim_agent_compaction_task(&pane, generation)
+                    .unwrap()
+                    .unwrap();
+                claimed.provider = dispatch.provider.clone();
+                assert_eq!(claimed.budget_owner.as_ref().unwrap().member, member);
+                compaction = Some(claimed);
+            }
         }
     }
     let (stop, mut stopped) = tokio::sync::oneshot::channel();
@@ -156,7 +327,11 @@ async fn qualify(input_limit: u64, case: RequestCase) {
                 attempt["model"]["model"].as_str().unwrap().to_string(),
             ));
             let summary = matches!(case, RequestCase::SummaryRepair);
-            let text = if summary && index == 1 {
+            let text = if matches!(case, RequestCase::Router) {
+                serde_json::json!({"version":1,"size":"small","reasoning_effort":"high","confidence":0.9,"rationale":"fixture"}).to_string()
+            } else if matches!(case, RequestCase::Title) {
+                "Original accounting title".into()
+            } else if summary && index == 1 {
                 "not a summary batch".into()
             } else {
                 serde_json::json!({"rationale":"fixture","actions":[{"type":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"done"}]}).to_string()
@@ -177,9 +352,55 @@ async fn qualify(input_limit: u64, case: RequestCase) {
             .unwrap();
     let client = async {
         let mut observed = Vec::new();
-        let mut call = Box::pin(tokio::task::unconstrained(
-            execute_runtime_agent_provider_dispatch(dispatch, None, sender, pending.clone()),
-        ));
+        let observer = ProviderWireRequestObserver::new(&member.conversation, "%1", sender.clone())
+            .with_pending_observations(pending.clone());
+        // Separate boxed branches keep the auxiliary and ordinary runner
+        // state machines out of the enclosing fixture's stack-resident future.
+        let work: Pin<Box<dyn Future<Output = Result<()>> + '_>> = if let Some(dispatch) = memory {
+            Box::pin(async move {
+                execute_runtime_agent_remember_dispatch(dispatch, observer)
+                    .await
+                    .map(|_| ())
+            })
+        } else if let Some(dispatch) = title {
+            Box::pin(async move {
+                match execute_runtime_agent_session_title_dispatch(dispatch, observer)
+                    .await
+                    .0
+                {
+                    AgentSessionTitleOutcome::Generated(_) => Ok(()),
+                    AgentSessionTitleOutcome::Rejected(reason) => {
+                        Err(MezError::invalid_state(reason))
+                    }
+                }
+            })
+        } else if let Some(dispatch) = compaction {
+            Box::pin(async move {
+                let observer = observer.with_claim_generation(dispatch.task.task_generation);
+                let owner = ProviderWorkerOwner::compaction(&dispatch);
+                let mut workers = JoinSet::new();
+                let mut owners = Default::default();
+                let admitted = spawn_owned_agent_provider_worker(
+                    &mut workers,
+                    &mut owners,
+                    Some(owner),
+                    async move {
+                        execute_runtime_agent_compaction_dispatch(dispatch, observer)
+                            .await
+                            .map(|_| None)
+                    },
+                );
+                assert!(admitted.is_some(), "actual compactor producer registration");
+                workers.join_next().await.unwrap().unwrap().map(|_| ())
+            })
+        } else {
+            Box::pin(async {
+                execute_runtime_agent_provider_dispatch(dispatch, None, sender, pending.clone())
+                    .await
+                    .map(|_| ())
+            })
+        };
+        let mut call = Box::pin(tokio::task::unconstrained(work));
         let result = loop {
             tokio::select! {
                 biased;
@@ -234,7 +455,14 @@ async fn qualify(input_limit: u64, case: RequestCase) {
             "exhausted root issued {} physical requests",
             served.len()
         );
-        assert_eq!(result.unwrap_err().kind(), MezErrorKind::BudgetSuspended);
+        let error = result.unwrap_err();
+        if matches!(case, RequestCase::Title) {
+            // The existing title boundary sanitizes provider errors to this
+            // bounded rejection. Native zero-send/zero-expense remains proved.
+            assert_eq!(error.message(), "provider_error");
+        } else {
+            assert_eq!(error.kind(), MezErrorKind::BudgetSuspended);
+        }
         assert_eq!((known, receipts), (UsageTotals::default(), 0));
     } else {
         assert!(result.is_ok(), "production dispatch failed: {result:?}");

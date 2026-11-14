@@ -454,65 +454,82 @@ async fn max_messages_actor_repeated_exhaustion_is_terminal_once() {
 /// expense owner; repeated checkpoints and late cumulative final are inert.
 #[tokio::test]
 async fn max_messages_checkpoint_cancel_stale_and_mismatched_owner() {
-    let (mut service, dispatch) = issued_fixture().await;
-    let provider = IncompleteProvider {
-        requests: Mutex::new(Vec::new()),
-        failures: usize::MAX,
-        stream: false,
-    };
-    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-    let observer = ProviderWireRequestObserver::new(&dispatch.turn.conversation_id, "%1", sender)
-        .with_claim_generation(7);
-    let request = crate::integrations::agent::context::assemble_model_request(
-        &dispatch.model_profile,
-        provider.api_compatibility(),
-        &dispatch.turn,
-        dispatch.context.durable(),
-    )
-    .unwrap();
-    let provider =
-        ObservedAsyncModelProvider::new(&provider, &observer, ProviderRequestPurpose::Execution);
-    let error = provider.send_request_async(&request).await.unwrap_err();
-    let observation = receiver.recv().await.unwrap();
-    for mismatch in 0..3 {
-        let mut wrong = observation.clone();
-        match mismatch {
-            0 => wrong.claim_generation = Some(8),
-            1 => wrong.agent_id = "foreign".into(),
-            _ => wrong.model = "foreign".into(),
+    for purpose in [
+        ProviderRequestPurpose::Execution,
+        ProviderRequestPurpose::FailureSummary,
+    ] {
+        let (mut service, dispatch) = issued_fixture().await;
+        let mut root = super::budget_custody::FixtureRoot(Some(
+            service
+                .agent_transcript_store()
+                .unwrap()
+                .root()
+                .parent()
+                .unwrap()
+                .to_owned(),
+        ));
+        let provider = IncompleteProvider {
+            requests: Mutex::new(Vec::new()),
+            failures: usize::MAX,
+            stream: false,
+        };
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let observer =
+            ProviderWireRequestObserver::new(&dispatch.turn.conversation_id, "%1", sender)
+                .with_claim_generation(7);
+        let request = crate::integrations::agent::context::assemble_model_request(
+            &dispatch.model_profile,
+            provider.api_compatibility(),
+            &dispatch.turn,
+            dispatch.context.durable(),
+        )
+        .unwrap();
+        let provider = ObservedAsyncModelProvider::new(&provider, &observer, purpose);
+        let error = provider.send_request_async(&request).await.unwrap_err();
+        let observation = receiver.recv().await.unwrap();
+        for mismatch in 0..3 {
+            let mut wrong = observation.clone();
+            match mismatch {
+                0 => wrong.claim_generation = Some(8),
+                1 => wrong.agent_id = "foreign".into(),
+                _ => wrong.model = "foreign".into(),
+            }
+            service.checkpoint_provider_wire_usage(&wrong);
         }
-        service.checkpoint_provider_wire_usage(&wrong);
+        let key = mez_agent::ModelTokenUsageKey::new("local-chat", "test-model");
+        assert!(
+            service
+                .agent_token_usage_for_conversation(&dispatch.turn.conversation_id)
+                .is_empty()
+        );
+        service.clear_claimed_agent_provider_task(&dispatch.turn.turn_id);
+        service.checkpoint_provider_wire_usage(&observation);
+        service.checkpoint_provider_wire_usage(&observation);
+        assert_eq!(
+            service.agent_token_usage_for_conversation(&dispatch.turn.conversation_id)[&key],
+            error.provider_incurred_usage()
+        );
+        let agent = AgentId::opaque(dispatch.turn.agent_id.clone()).unwrap();
+        assert!(service.settle_provider_failure_usage(
+            &agent,
+            &dispatch.turn.turn_id,
+            7,
+            error.provider_incurred_usage()
+        ));
+        assert!(!service.settle_provider_failure_usage(
+            &agent,
+            &dispatch.turn.turn_id,
+            7,
+            error.provider_incurred_usage()
+        ));
+        assert_eq!(
+            service.agent_token_usage_for_conversation(&dispatch.turn.conversation_id)[&key],
+            error.provider_incurred_usage()
+        );
+        service.terminate_all_pane_processes().unwrap();
+        drop(service);
+        root.cleanup();
     }
-    let key = mez_agent::ModelTokenUsageKey::new("local-chat", "test-model");
-    assert!(
-        service
-            .agent_token_usage_for_conversation(&dispatch.turn.conversation_id)
-            .is_empty()
-    );
-    service.clear_claimed_agent_provider_task(&dispatch.turn.turn_id);
-    service.checkpoint_provider_wire_usage(&observation);
-    service.checkpoint_provider_wire_usage(&observation);
-    assert_eq!(
-        service.agent_token_usage_for_conversation(&dispatch.turn.conversation_id)[&key],
-        error.provider_incurred_usage()
-    );
-    let agent = AgentId::opaque(dispatch.turn.agent_id.clone()).unwrap();
-    assert!(service.settle_provider_failure_usage(
-        &agent,
-        &dispatch.turn.turn_id,
-        7,
-        error.provider_incurred_usage()
-    ));
-    assert!(!service.settle_provider_failure_usage(
-        &agent,
-        &dispatch.turn.turn_id,
-        7,
-        error.provider_incurred_usage()
-    ));
-    assert_eq!(
-        service.agent_token_usage_for_conversation(&dispatch.turn.conversation_id)[&key],
-        error.provider_incurred_usage()
-    );
 }
 
 /// The real production relay must apply original response barriers in order
