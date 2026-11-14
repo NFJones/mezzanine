@@ -707,7 +707,8 @@ pub(crate) struct RuntimeAgentComponent {
     pending_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
     /// In-flight compaction tasks retained by pane and generation until each
     /// worker settles, including tasks superseded by a newer pane generation.
-    claimed_agent_compaction_tasks: BTreeMap<(String, u64), RuntimeAgentCompactionTask>,
+    claimed_agent_compaction_tasks:
+        BTreeMap<(String, u64), token_budget::claim_fence::CompactionClaim>,
     /// Exact prepared head/receipt retained until actor adoption or cancellation.
     replay_epoch_publications:
         BTreeMap<(String, u64), crate::runtime::RuntimeReplayEpochPublication>,
@@ -3328,7 +3329,8 @@ impl RuntimeSessionService {
         let claimed = self
             .agent
             .claimed_agent_compaction_tasks
-            .get(&(pane.to_string(), *generation));
+            .get(&(pane.to_string(), *generation))
+            .map(|claim| &claim.task);
         let pending = self
             .agent
             .pending_agent_compaction_tasks
@@ -3443,6 +3445,7 @@ impl RuntimeSessionService {
         } else {
             *current_epoch = (*current_epoch).max(task.compaction_epoch);
         }
+        self.revoke_compaction_claim_sends(&pane_id, task.task_generation);
         self.agent.agent_compaction_task_owners.insert(
             pane_id.clone(),
             (task.task_generation, task.conversation_id.clone()),
@@ -3571,6 +3574,7 @@ impl RuntimeSessionService {
         self.agent
             .agent_compaction_epochs
             .insert(work.pane_id.clone(), epoch);
+        self.revoke_compaction_claim_sends(&work.pane_id, generation);
         self.agent.agent_compaction_task_owners.insert(
             work.pane_id.clone(),
             (generation, work.conversation_id.clone()),
@@ -3669,7 +3673,12 @@ impl RuntimeSessionService {
         self.agent
             .pending_agent_compaction_tasks
             .values()
-            .chain(self.agent.claimed_agent_compaction_tasks.values())
+            .chain(
+                self.agent
+                    .claimed_agent_compaction_tasks
+                    .values()
+                    .map(|claim| &claim.task),
+            )
             .filter_map(|task| task.resume_turn_id.clone())
             .collect()
     }
@@ -3756,6 +3765,7 @@ impl RuntimeSessionService {
         self.agent
             .claimed_agent_compaction_tasks
             .get(&(pane.to_owned(), generation))
+            .map(|claim| &claim.task)
     }
 
     /// Retains the original opaque publication, never a replacement from a reply.
@@ -3790,7 +3800,20 @@ impl RuntimeSessionService {
             .max()
     }
 
-    /// Records that a provider worker owns one compaction task.
+    /// Logical owner publication precedes asynchronous dispatch. Revoke older
+    /// send authority without deleting its independent late-result custody.
+    fn revoke_compaction_claim_sends(&self, pane: &str, generation: u64) {
+        for ((claimed_pane, claimed_generation), claim) in
+            &self.agent.claimed_agent_compaction_tasks
+        {
+            if claimed_pane == pane && *claimed_generation <= generation {
+                claim.budget_fence.retire();
+            }
+        }
+    }
+
+    /// Records the actual claimed task and a new claim-local send fence. A
+    /// delayed older claim retains only accounting, never current authority.
     pub(crate) fn claim_agent_compaction_task_state(
         &mut self,
         pane_id: impl Into<String>,
@@ -3811,6 +3834,9 @@ impl RuntimeSessionService {
             .get(&pane_id)
             .is_none_or(|(generation, _)| *generation <= task.task_generation);
         if owner_is_not_newer {
+            // Superseding logical ownership revokes send authority before the
+            // old claim is eventually removed. Its late expense stays owned.
+            self.revoke_compaction_claim_sends(&pane_id, task.task_generation);
             self.agent.agent_compaction_task_owners.insert(
                 pane_id.clone(),
                 (task.task_generation, task.conversation_id.clone()),
@@ -3840,9 +3866,36 @@ impl RuntimeSessionService {
                     delivery: None,
                 });
         }
+        let key = (task.pane_id.clone(), task.task_generation);
+        if let Some(previous) = self.agent.claimed_agent_compaction_tasks.get(&key) {
+            previous.budget_fence.retire();
+        }
+        let budget_fence = token_budget::claim_fence::AuxiliaryClaimFence::new();
+        if !owner_is_not_newer {
+            // A delayed older task may retain accounting, not autonomous work.
+            budget_fence.retire();
+        }
+        self.agent.claimed_agent_compaction_tasks.insert(
+            key,
+            token_budget::claim_fence::CompactionClaim { task, budget_fence },
+        );
+    }
+
+    /// Revoke before removing this exact claim. Dispatch and receipt clones
+    /// cannot keep send authority alive after logical retirement.
+    fn take_agent_compaction_claim(
+        &mut self,
+        pane: &str,
+        generation: u64,
+    ) -> Option<RuntimeAgentCompactionTask> {
+        let key = (pane.to_owned(), generation);
+        if let Some(claim) = self.agent.claimed_agent_compaction_tasks.get(&key) {
+            claim.budget_fence.retire();
+        }
         self.agent
             .claimed_agent_compaction_tasks
-            .insert((task.pane_id.clone(), task.task_generation), task);
+            .remove(&key)
+            .map(|claim| claim.task)
     }
 
     /// Finishes claimed compaction state and clears its pane activity marker.
@@ -3858,10 +3911,7 @@ impl RuntimeSessionService {
         {
             work.cancel();
         }
-        let task = self
-            .agent
-            .claimed_agent_compaction_tasks
-            .remove(&(pane_id.to_string(), task_generation));
+        let task = self.take_agent_compaction_claim(pane_id, task_generation);
         task.as_ref()?;
         if self
             .agent
@@ -3935,10 +3985,7 @@ impl RuntimeSessionService {
             .is_some_and(|task| task.task_generation == task_generation)
             .then(|| self.agent.pending_agent_compaction_tasks.remove(pane_id))
             .flatten();
-        let claimed = self
-            .agent
-            .claimed_agent_compaction_tasks
-            .remove(&(pane_id.to_string(), task_generation));
+        let claimed = self.take_agent_compaction_claim(pane_id, task_generation);
         let preparation = self
             .agent
             .pending_manual_compaction_preparations

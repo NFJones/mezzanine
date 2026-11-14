@@ -104,13 +104,22 @@ impl RuntimeSessionService {
         &self,
         task: &crate::runtime::RuntimeAgentCompactionTask,
     ) -> Result<Option<RuntimeBudgetRequestOwner>> {
-        self.claim_runtime_budget_auxiliary(
+        let mut owner = self.claim_runtime_budget_auxiliary(
             task.budget_capture.as_ref(),
             RuntimeBudgetAuxiliaryClaim::Compaction {
                 pane: task.pane_id.clone(),
                 generation: task.task_generation,
             },
-        )
+        )?;
+        if let Some(owner) = &mut owner {
+            owner.auxiliary_fence = self
+                .agent
+                .claimed_agent_compaction_tasks
+                .get(&(task.pane_id.clone(), task.task_generation))
+                .filter(|claim| claim.task.conversation_id == task.conversation_id)
+                .map(|claim| claim.budget_fence.capture());
+        }
+        Ok(owner)
     }
 
     /// Called after the existing title owner assigns its actual claim attempt.

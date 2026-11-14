@@ -29,3 +29,12 @@ pub(crate) struct RememberClaim {
     pub(crate) budget_fence: AuxiliaryClaimFence,
     pub(crate) budget_wait: Option<super::remember_wait::RememberWait>,
 }
+
+/// Exact compaction generation retains expense separately. Only this actor
+/// allocation keeps its send fence alive; superseded generations stay revoked
+/// even while their original result and accounting custody are retained.
+#[derive(Debug, Clone)]
+pub(crate) struct CompactionClaim {
+    pub(crate) task: crate::runtime::RuntimeAgentCompactionTask,
+    pub(crate) budget_fence: AuxiliaryClaimFence,
+}

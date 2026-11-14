@@ -30,7 +30,7 @@ pub(crate) struct RuntimeBudgetRequestOwner {
     /// Retained through every concrete attempt/journal clone. This narrows
     /// expense allocation only; task liveness requires separate actor checks.
     pub(super) auxiliary: Option<super::auxiliary::RuntimeBudgetAuxiliaryClaim>,
-    /// Current title/remember claim only; never keeps send authority alive.
+    /// Current auxiliary claim only; never keeps send authority alive.
     pub(in crate::runtime) auxiliary_fence: Option<std::sync::Weak<std::sync::atomic::AtomicBool>>,
     #[cfg(test)]
     pub(super) title_grant_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
@@ -259,6 +259,7 @@ impl RuntimeBudgetAttemptWork {
             Some(
                 super::auxiliary::RuntimeBudgetAuxiliaryClaim::Title { .. }
                     | super::auxiliary::RuntimeBudgetAuxiliaryClaim::Remember { .. }
+                    | super::auxiliary::RuntimeBudgetAuxiliaryClaim::Compaction { .. }
             )
         ) {
             return true;
@@ -379,6 +380,7 @@ impl RuntimeBudgetSendPermit {
             Some(
                 super::auxiliary::RuntimeBudgetAuxiliaryClaim::Title { .. }
                     | super::auxiliary::RuntimeBudgetAuxiliaryClaim::Remember { .. }
+                    | super::auxiliary::RuntimeBudgetAuxiliaryClaim::Compaction { .. }
             )
         ) {
             return Ok(Ok(self.consume()?));

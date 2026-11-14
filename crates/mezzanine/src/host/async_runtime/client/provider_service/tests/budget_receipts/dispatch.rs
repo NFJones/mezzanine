@@ -79,7 +79,42 @@ impl RequestCase {
     }
 }
 
+#[tokio::test]
+async fn budget_compaction_retired_claim_cannot_start_physical_http() {
+    qualify_retirement(100, RequestCase::Compaction, CompactionRetirement::Stop).await;
+}
+
+#[tokio::test]
+async fn budget_compaction_superseded_or_completed_claim_cannot_start_physical_http() {
+    for retirement in [
+        CompactionRetirement::Queued,
+        CompactionRetirement::Claimed,
+        CompactionRetirement::Completed,
+    ] {
+        Box::pin(qualify_retirement(100, RequestCase::Compaction, retirement)).await;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompactionRetirement {
+    None,
+    Stop,
+    Queued,
+    Claimed,
+    Completed,
+}
+
 async fn qualify(input_limit: u64, case: RequestCase) {
+    Box::pin(qualify_retirement(
+        input_limit,
+        case,
+        CompactionRetirement::None,
+    ))
+    .await;
+}
+
+async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: CompactionRetirement) {
+    let retire_compaction = retirement != CompactionRetirement::None;
     let Prepared {
         mut service,
         mut dispatch,
@@ -270,6 +305,47 @@ async fn qualify(input_limit: u64, case: RequestCase) {
                 compaction = Some(claimed);
             }
         }
+    }
+    if retirement == CompactionRetirement::Stop {
+        let primary = service
+            .session()
+            .clients()
+            .iter()
+            .find(|client| service.session().is_attached_primary(&client.id))
+            .unwrap()
+            .id
+            .clone();
+        service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+    }
+    if matches!(
+        retirement,
+        CompactionRetirement::Queued | CompactionRetirement::Claimed
+    ) {
+        let original = &compaction.as_ref().unwrap().task;
+        let generation = original.task_generation;
+        service.queue_agent_compaction_task(original.clone());
+        let successor = service
+            .pending_agent_compaction_task_generation("%1")
+            .unwrap();
+        assert_ne!(successor, generation);
+        if retirement == CompactionRetirement::Claimed {
+            let claimed = service
+                .claim_agent_compaction_task("%1", successor)
+                .unwrap()
+                .unwrap();
+            assert_eq!(claimed.task.task_generation, successor);
+            drop(claimed);
+        }
+    }
+    if retirement == CompactionRetirement::Completed {
+        let generation = compaction.as_ref().unwrap().task.task_generation;
+        assert!(
+            service
+                .finish_agent_compaction_task("%1", generation)
+                .is_some()
+        );
     }
     // Actual auxiliary claims must not become generic same-conversation
     // request factories. Capture refusals now, but assert only after native
@@ -515,6 +591,10 @@ async fn qualify(input_limit: u64, case: RequestCase) {
     };
     let ((result, served), mut exit) = tokio::join!(control, actor.run());
     exit.service.terminate_all_pane_processes().unwrap();
+    let outstanding: i64 = rusqlite::Connection::open(store.path()).unwrap().query_row(
+        "SELECT COUNT(*) FROM (SELECT id FROM budget_attempts WHERE terminal=0 UNION SELECT attempt FROM budget_admissions WHERE retired_receipt IS NULL)",
+        [], |row| row.get(0),
+    ).unwrap();
     drop((exit, handle, pending));
     root.cleanup();
     let served = served.expect("loopback server did not retire").unwrap();
@@ -522,10 +602,10 @@ async fn qualify(input_limit: u64, case: RequestCase) {
         Ok(result) => result,
         Err(panic) => std::panic::resume_unwind(panic),
     };
-    if input_limit == 0 {
+    if input_limit == 0 || retire_compaction {
         assert!(
             served.is_empty(),
-            "exhausted root issued {} physical requests",
+            "inhibited original request issued {} physical requests",
             served.len()
         );
         let error = result.unwrap_err();
@@ -536,7 +616,16 @@ async fn qualify(input_limit: u64, case: RequestCase) {
         } else {
             assert_eq!(error.kind(), MezErrorKind::BudgetSuspended);
         }
-        assert_eq!((known, receipts), (UsageTotals::default(), 0));
+        assert_eq!(known, UsageTotals::default());
+        if retire_compaction {
+            assert!(receipts > 0, "original unused native grant must settle");
+            assert_eq!(
+                outstanding, 0,
+                "original unused grant cannot retain exposure"
+            );
+        } else {
+            assert_eq!(receipts, 0);
+        }
     } else {
         assert!(result.is_ok(), "production dispatch failed: {result:?}");
         let purposes = case.purposes();

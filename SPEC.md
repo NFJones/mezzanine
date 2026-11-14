@@ -16773,6 +16773,16 @@ ordinary purpose before allocating an attempt. A held capture MUST NOT match
 an ordinary owner or another auxiliary task solely through equal membership.
 Retained expense identity does not prove current task liveness or grant resume
 authority after retirement.
+Compaction send liveness MUST belong to the actual actor claim allocation, not
+its task, dispatch, publication or late-expense clones. Publishing a newer
+logical generation, including queued source preparation, MUST revoke older
+claim send fences before exposing that owner. Stop, exact completion and claim
+replacement MUST revoke before removal. A delayed older claim MUST remain
+revoked. Native binding validation MUST precede the final atomic liveness check,
+with no intervening I/O or await before original permit consumption. Refused
+unused grants MUST retain withdrawal and terminal receipt custody with no HTTP;
+already-admitted exposure retains its original expense. These fences alone do
+not suspend compaction claim timers, release fair capacity or activate budgets.
 Remember observers MUST use the task's captured conversation identity, never its
 runtime-scoped prompt-cache namespace or a current pane fallback. A claimed
 remember dispatch MUST borrow a weak send fence owned by its actual actor claim.
