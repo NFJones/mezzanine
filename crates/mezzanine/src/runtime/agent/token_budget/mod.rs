@@ -926,6 +926,7 @@ impl RuntimeSessionService {
             binding_owner: entry.owner.clone(),
             store: entry.store.clone(),
             origin: self.capture_agent_accounting_origin_for_pane(&turn.pane_id),
+            auxiliary: None,
         };
         owner.validate_request(&turn.conversation_id)?;
         Ok(Some(owner))

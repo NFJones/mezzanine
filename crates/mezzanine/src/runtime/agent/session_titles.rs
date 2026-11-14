@@ -849,7 +849,8 @@ impl RuntimeSessionService {
         else {
             return Ok(None);
         };
-        let budget_owner = match self.claim_runtime_budget_auxiliary(task.budget_capture.as_ref()) {
+        task.attempt_id = crate::storage::token_usage::new_token_usage_event_id();
+        let budget_owner = match self.claim_runtime_budget_title(&task) {
             Ok(owner) => owner,
             Err(error) => {
                 self.restore_pending_agent_session_title_task(task);
@@ -898,7 +899,6 @@ impl RuntimeSessionService {
             self.restore_pending_agent_session_title_task(task);
             return Ok(None);
         }
-        task.attempt_id = crate::storage::token_usage::new_token_usage_event_id();
         self.agent
             .session_title_accounting_owners
             .insert(task.attempt_id.clone(), task.clone());

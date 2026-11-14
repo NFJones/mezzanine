@@ -27,6 +27,9 @@ pub(crate) struct RuntimeBudgetRequestOwner {
     pub(super) binding_owner: String,
     pub(super) store: TokenUsageStore,
     pub(super) origin: AccountingOrigin,
+    /// Retained through every concrete attempt/journal clone. This narrows
+    /// expense allocation only; task liveness requires separate actor checks.
+    pub(super) auxiliary: Option<super::auxiliary::RuntimeBudgetAuxiliaryClaim>,
 }
 
 impl RuntimeBudgetRequestOwner {
@@ -48,6 +51,15 @@ impl RuntimeBudgetRequestOwner {
         purpose: BudgetAttemptPurpose,
     ) -> Result<RuntimeBudgetAttemptWork> {
         self.validate_request(&self.member.conversation)?;
+        if self
+            .auxiliary
+            .as_ref()
+            .is_some_and(|claim| claim.purpose() != purpose)
+        {
+            return Err(MezError::conflict(
+                "auxiliary budget request purpose changed",
+            ));
+        }
         let attempt = BudgetAttempt {
             namespace: self.member.namespace.clone(),
             id: BudgetAttemptId::new(crate::storage::token_usage::new_token_usage_event_id())
@@ -213,6 +225,7 @@ impl RuntimeBudgetAttemptWork {
         original.member == owner.member
             && original.binding_owner == owner.binding_owner
             && original.store.path() == owner.store.path()
+            && original.auxiliary == owner.auxiliary
             && original
                 .validate_request(&owner.member.conversation)
                 .is_ok()

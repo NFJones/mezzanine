@@ -16766,6 +16766,13 @@ worker-profile guess or provider-reported response model. Title, macro judgment,
 sandbox assessment and failure summary MUST retain distinct typed purposes even
 when their diagnostic category remains `auxiliary`. Failure-summary repair calls
 MUST retain their summary purpose after the interaction kind changes to repair.
+Turn-less owners MUST retain their exact original compaction pane/generation,
+memory pane/observation, or title conversation/dispatch/claimed attempt through
+concrete attempt and journal clones. They MUST refuse a different auxiliary or
+ordinary purpose before allocating an attempt. A held capture MUST NOT match
+an ordinary owner or another auxiliary task solely through equal membership.
+Retained expense identity does not prove current task liveness or grant resume
+authority after retirement.
 Missing ownership MUST NOT manufacture a root or silently activate budgeting.
 An internal retry MUST wait for the prior durable receipt AND actor handoff
 before allocating its next descriptor. Refusal of that fresh admission MUST

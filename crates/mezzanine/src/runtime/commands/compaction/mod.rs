@@ -410,10 +410,10 @@ impl RuntimeSessionService {
             .is_some_and(|task| task.request.is_some())
         {
             self.require_auxiliary_accounting_capacity()?;
-            self.claim_runtime_budget_auxiliary(
-                self.retained_agent_compaction_task(pane_id, task_generation)
-                    .and_then(|task| task.budget_capture.as_ref()),
-            )?;
+            let task = self
+                .retained_agent_compaction_task(pane_id, task_generation)
+                .ok_or_else(|| MezError::conflict("original budget compaction task unavailable"))?;
+            self.claim_runtime_budget_compaction(task)?;
         }
         let Some(task) = self.take_pending_agent_compaction_task(pane_id) else {
             return Ok(None);
@@ -568,7 +568,7 @@ impl RuntimeSessionService {
         self.claim_agent_compaction_task_state(pane_id, task.clone());
         let delivery = crate::runtime::RuntimeCompactionDispatchDelivery::new();
         self.track_compaction_dispatch_delivery(&task, delivery.observer())?;
-        let budget_owner = self.claim_runtime_budget_auxiliary(task.budget_capture.as_ref())?;
+        let budget_owner = self.claim_runtime_budget_compaction(&task)?;
         Ok(RuntimeAgentCompactionDispatch {
             budget_owner,
             delivery,

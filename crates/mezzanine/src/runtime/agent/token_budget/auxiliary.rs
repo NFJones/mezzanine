@@ -5,6 +5,39 @@
 use super::request::RuntimeBudgetRequestOwner;
 use super::*;
 
+/// Frozen claimed-task identity, not an ordinary turn or resumable authority.
+/// The title attempt is assigned at claim; its dispatch alone is insufficient.
+/// Expense custody survives task retirement, but this descriptor cannot revive it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum RuntimeBudgetAuxiliaryClaim {
+    Compaction {
+        pane: String,
+        generation: u64,
+    },
+    Remember {
+        pane: String,
+        observation: String,
+    },
+    Title {
+        conversation: String,
+        dispatch: String,
+        attempt: String,
+    },
+}
+
+impl RuntimeBudgetAuxiliaryClaim {
+    pub(super) fn purpose(
+        &self,
+    ) -> crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose {
+        use crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose;
+        match self {
+            Self::Compaction { .. } => BudgetAttemptPurpose::Compaction,
+            Self::Remember { .. } => BudgetAttemptPurpose::Memory,
+            Self::Title { .. } => BudgetAttemptPurpose::Title,
+        }
+    }
+}
+
 /// Exact queued operation selected by the existing auxiliary scheduler.
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeBudgetAuxiliarySource {
@@ -40,11 +73,49 @@ impl RuntimeSessionService {
         &self,
         pane: &str,
     ) -> Result<Option<RuntimeBudgetRequestOwner>> {
+        if !self.agent.budget_memberships.enabled {
+            return Ok(None);
+        }
+        let task = self
+            .agent
+            .pending_agent_remember_tasks
+            .get(pane)
+            .ok_or_else(|| MezError::conflict("original budget memory task unavailable"))?;
         self.claim_runtime_budget_auxiliary(
-            self.agent
-                .pending_agent_remember_tasks
-                .get(pane)
-                .and_then(|task| task.budget_capture.as_ref()),
+            task.budget_capture.as_ref(),
+            RuntimeBudgetAuxiliaryClaim::Remember {
+                pane: task.pane_id.clone(),
+                observation: task.observation_id.clone(),
+            },
+        )
+    }
+
+    /// Freeze the exact retained compactor generation, including recursive waves.
+    pub(crate) fn claim_runtime_budget_compaction(
+        &self,
+        task: &crate::runtime::RuntimeAgentCompactionTask,
+    ) -> Result<Option<RuntimeBudgetRequestOwner>> {
+        self.claim_runtime_budget_auxiliary(
+            task.budget_capture.as_ref(),
+            RuntimeBudgetAuxiliaryClaim::Compaction {
+                pane: task.pane_id.clone(),
+                generation: task.task_generation,
+            },
+        )
+    }
+
+    /// Called after the existing title owner assigns its actual claim attempt.
+    pub(crate) fn claim_runtime_budget_title(
+        &self,
+        task: &crate::runtime::RuntimeAgentSessionTitleTask,
+    ) -> Result<Option<RuntimeBudgetRequestOwner>> {
+        self.claim_runtime_budget_auxiliary(
+            task.budget_capture.as_ref(),
+            RuntimeBudgetAuxiliaryClaim::Title {
+                conversation: task.conversation_id.clone(),
+                dispatch: task.dispatch_id.clone(),
+                attempt: task.attempt_id.clone(),
+            },
         )
     }
 
@@ -159,9 +230,10 @@ impl RuntimeSessionService {
 
     /// Claim-time revalidation follows the existing task's authority checks.
     /// A prepared outcome or descriptor alone is never a durable readiness ACK.
-    pub(crate) fn claim_runtime_budget_auxiliary(
+    fn claim_runtime_budget_auxiliary(
         &self,
         capture: Option<&RuntimeBudgetAuxiliaryCapture>,
+        claim: RuntimeBudgetAuxiliaryClaim,
     ) -> Result<Option<RuntimeBudgetRequestOwner>> {
         if !self.agent.budget_memberships.enabled {
             return Ok(None);
@@ -197,6 +269,7 @@ impl RuntimeSessionService {
             binding_owner: entry.owner.clone(),
             store: entry.store.clone(),
             origin: capture.origin.clone(),
+            auxiliary: Some(claim),
         }))
     }
 }

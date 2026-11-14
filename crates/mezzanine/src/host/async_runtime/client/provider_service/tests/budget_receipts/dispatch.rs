@@ -271,6 +271,79 @@ async fn qualify(input_limit: u64, case: RequestCase) {
             }
         }
     }
+    // Actual auxiliary claims must not become generic same-conversation
+    // request factories. Capture refusals now, but assert only after native
+    // actors, HTTP work and the exact fixture root have retired, including RED.
+    let auxiliary_owner = memory
+        .as_ref()
+        .and_then(|dispatch| dispatch.budget_owner.as_ref())
+        .or_else(|| {
+            title
+                .as_ref()
+                .and_then(|dispatch| dispatch.budget_owner.as_ref())
+        })
+        .or_else(|| {
+            compaction
+                .as_ref()
+                .and_then(|dispatch| dispatch.budget_owner.as_ref())
+        });
+    let purpose_refusals = auxiliary_owner.map(|owner| {
+        [
+            BudgetAttemptPurpose::Execution,
+            BudgetAttemptPurpose::Routing,
+            BudgetAttemptPurpose::Compaction,
+            BudgetAttemptPurpose::Memory,
+            BudgetAttemptPurpose::Title,
+            BudgetAttemptPurpose::MacroJudge,
+            BudgetAttemptPurpose::SandboxAssessment,
+            BudgetAttemptPurpose::FailureSummary,
+        ]
+        .into_iter()
+        .map(|purpose| {
+            let expected = matches!(
+                (case, purpose),
+                (RequestCase::Compaction, BudgetAttemptPurpose::Compaction)
+                    | (RequestCase::Memory, BudgetAttemptPurpose::Memory)
+                    | (RequestCase::Title, BudgetAttemptPurpose::Title)
+            );
+            let accepted = owner
+                .prepare_attempt(
+                    mez_agent::ModelTokenUsageKey::new("local-chat", case.model()),
+                    purpose,
+                )
+                .is_ok();
+            (format!("{purpose:?}"), accepted, expected)
+        })
+        .collect::<Vec<_>>()
+    });
+    let held_isolation = if let Some(owner) = auxiliary_owner.filter(|_| input_limit == 0) {
+        let purpose = match case {
+            RequestCase::Compaction => BudgetAttemptPurpose::Compaction,
+            RequestCase::Memory => BudgetAttemptPurpose::Memory,
+            RequestCase::Title => BudgetAttemptPurpose::Title,
+            _ => unreachable!("only actual auxiliary dispatches have auxiliary owners"),
+        };
+        let work = owner
+            .prepare_attempt(
+                mez_agent::ModelTokenUsageKey::new("local-chat", case.model()),
+                purpose,
+            )
+            .unwrap();
+        let admission = work.admission_owner();
+        let outcome = admission.claim().await.unwrap();
+        let capture = admission.capture_held().await.unwrap();
+        Some(
+            matches!(outcome, RuntimeBudgetAttemptAdmission::Held(_))
+                && capture.matches_owner(owner)
+                && capture.matches_owner(&owner.clone())
+                && !capture.matches_owner(dispatch.budget_owner.as_ref().unwrap()),
+        )
+    } else {
+        None
+    };
+    let allocation_was_inert = rows(&store, "budget_attempts") == 0
+        && rows(&store, "budget_admissions") == 0
+        && rows(&store, "budget_receipts") == 0;
     let (stop, mut stopped) = tokio::sync::oneshot::channel();
     let writer = store.clone();
     let server = tokio::spawn(async move {
@@ -503,5 +576,17 @@ async fn qualify(input_limit: u64, case: RequestCase) {
                 2 * purposes.len() as i64
             )
         );
+    }
+    if let Some(purposes) = purpose_refusals {
+        for (purpose, accepted, expected) in purposes {
+            assert_eq!(accepted, expected, "{case:?} claimed owner: {purpose}");
+        }
+    }
+    assert!(
+        allocation_was_inert,
+        "allocation/hold wrote expense or admission"
+    );
+    if let Some(isolated) = held_isolation {
+        assert!(isolated, "{case:?} held owner borrowed ordinary authority");
     }
 }

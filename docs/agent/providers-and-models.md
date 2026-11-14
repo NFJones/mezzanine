@@ -119,6 +119,13 @@ output/MAAP repair rounds keep the summary purpose. This connection does not
 enable production membership, root-wide effect inhibition, live policy
 publication or user controls; those remain staged.
 
+Turn-less expense owners also retain their original compaction generation,
+memory observation, or title dispatch and claimed attempt. They can allocate
+concrete attempts only for that auxiliary purpose, and a held attempt cannot
+match an ordinary owner or a different auxiliary task merely because the
+conversation and root agree. Retaining this identity preserves original expense
+custody; it is not proof that a retired task is live or permission to resume it.
+
 The runtime also has a staged retained-claim parking port. It accepts only a
 sealed capture of an observed nonwriting hold, releases scheduler capacity while
 keeping the original claim and conversation live, and fairly reacquires without
