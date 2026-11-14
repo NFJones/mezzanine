@@ -2060,12 +2060,9 @@ where
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let observation_id = dispatch.task.observation_id.clone();
-    let conversation_id = dispatch
-        .task
-        .request
-        .prompt_cache_session_id
-        .clone()
-        .unwrap_or_else(|| format!("pane:{pane_id}"));
+    // Cache affinity is runtime-scoped for remember requests, not immutable
+    // conversation ownership. Freeze the task's actual expense subject.
+    let conversation_id = dispatch.task.conversation_id.clone();
     let drain_key = ProviderObservationOwner::Remember(observation_id.clone());
     let pending: PendingProviderWireObservations = Default::default();
     let reported: SharedProviderReportedUsage = Default::default();

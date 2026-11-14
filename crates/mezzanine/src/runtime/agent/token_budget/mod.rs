@@ -27,6 +27,7 @@ use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 )]
 pub(crate) mod admission_work;
 pub(crate) mod auxiliary;
+pub(crate) mod claim_fence;
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "retained provider wait assembly remains staged")
@@ -928,7 +929,7 @@ impl RuntimeSessionService {
             store: entry.store.clone(),
             origin: self.capture_agent_accounting_origin_for_pane(&turn.pane_id),
             auxiliary: None,
-            title_fence: None,
+            auxiliary_fence: None,
             #[cfg(test)]
             title_grant_gate: None,
         };

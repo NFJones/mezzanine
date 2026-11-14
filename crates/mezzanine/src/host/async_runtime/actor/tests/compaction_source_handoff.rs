@@ -427,6 +427,10 @@ async fn manual_compaction_completion_excludes_unrelated_pending_title() {
         scope: ConfigScope::Primary, trusted: true,
         text: "[agents]\ndefault_provider=\"runtime-batch\"\ndefault_model_profile=\"default\"\nshell_mode=\"pane\"\nsession_title_policy=\"generated\"\n[providers.runtime-batch]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:9/v1\"\nmodels=[\"test\"]\ndefault_model=\"test\"\n[model_profiles.default]\nprovider=\"runtime-batch\"\nmodel=\"test\"\ncontext_window_tokens=128000\n[permissions]\nsandbox=\"policy-only\"\n".into(),
     }]).unwrap();
+    // Preparation issues human Stop, which now correctly retires this
+    // conversation's titles. Admit the independent title afterward so the
+    // original pressure/isolation assertions still exercise two live sources.
+    let work = prepare_manual_request(&mut actor, &primary);
     assert_eq!(
         actor.service.schedule_runtime_agent_session_title(
             "handoff-compaction",
@@ -439,7 +443,6 @@ async fn manual_compaction_completion_excludes_unrelated_pending_title() {
         .pending_agent_session_title_dispatch_id("handoff-compaction")
         .unwrap()
         .to_string();
-    let work = prepare_manual_request(&mut actor, &primary);
     let title_effects = actor.pending_provider_dispatch_side_effects().unwrap();
     assert!(
         matches!(title_effects.as_slice(), [RuntimeSideEffect::DispatchAgentSessionTitle { dispatch_id, .. }] if dispatch_id == &title)

@@ -722,7 +722,7 @@ pub(crate) struct RuntimeAgentComponent {
     /// Durable-memory generation tasks waiting for provider dispatch.
     pending_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
     /// Durable-memory generation tasks claimed by provider workers.
-    claimed_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
+    claimed_agent_remember_tasks: BTreeMap<String, token_budget::claim_fence::RememberClaim>,
     /// Issued memory expense is consumed by exact observation, never pane alone.
     remember_accounting_owners: BTreeMap<String, project_accounting::AuxiliaryAccountingOwner>,
     /// Turn-less generated-title tasks waiting for provider dispatch.
@@ -4032,12 +4032,20 @@ impl RuntimeSessionService {
         self.agent.pending_agent_remember_tasks.remove(pane_id)
     }
 
-    /// Records that a provider worker owns one durable-memory task.
+    /// Records one actual durable-memory claim and returns only its weak send
+    /// fence for dispatch. Replacement revokes the predecessor before removal;
+    /// separately retained expense owners never keep send authority alive.
     pub(crate) fn claim_agent_remember_task_state(
         &mut self,
         pane_id: impl Into<String>,
         task: RuntimeAgentRememberTask,
-    ) {
+    ) -> std::sync::Weak<std::sync::atomic::AtomicBool> {
+        let pane_id = pane_id.into();
+        if let Some(previous) = self.agent.claimed_agent_remember_tasks.get(&pane_id) {
+            previous.budget_fence.retire();
+        }
+        let budget_fence = token_budget::claim_fence::AuxiliaryClaimFence::new();
+        let fence = budget_fence.capture();
         let process = self.pane_process_identity(&task.pane_id).ok();
         self.agent
             .remember_accounting_owners
@@ -4053,12 +4061,13 @@ impl RuntimeSessionService {
                 process,
                 observation: format!("remember:{}", task.observation_id),
             });
-        self.agent
-            .claimed_agent_remember_tasks
-            .insert(pane_id.into(), task);
+        self.agent.claimed_agent_remember_tasks.insert(
+            pane_id,
+            token_budget::claim_fence::RememberClaim { task, budget_fence },
+        );
+        fence
     }
 
-    /// Finishes claimed durable-memory state and clears pane activity.
     /// Checks exact worker ownership without consuming a replacement request.
     pub(crate) fn agent_remember_observation_matches(
         &self,
@@ -4068,7 +4077,7 @@ impl RuntimeSessionService {
         self.agent
             .claimed_agent_remember_tasks
             .get(pane_id)
-            .is_some_and(|task| task.observation_id == observation_id)
+            .is_some_and(|claim| claim.task.observation_id == observation_id)
     }
 
     /// Finishes claimed durable-memory state and clears pane activity.
@@ -4076,7 +4085,14 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Option<RuntimeAgentRememberTask> {
-        let task = self.agent.claimed_agent_remember_tasks.remove(pane_id);
+        if let Some(claim) = self.agent.claimed_agent_remember_tasks.get(pane_id) {
+            claim.budget_fence.retire();
+        }
+        let task = self
+            .agent
+            .claimed_agent_remember_tasks
+            .remove(pane_id)
+            .map(|claim| claim.task);
         self.agent.agent_remembering_panes.remove(pane_id);
         task
     }
@@ -4088,12 +4104,8 @@ impl RuntimeSessionService {
             .pending_agent_remember_tasks
             .remove(pane_id)
             .is_some();
-        let claimed = self
-            .agent
-            .claimed_agent_remember_tasks
-            .remove(pane_id)
-            .is_some();
-        let active = self.agent.agent_remembering_panes.remove(pane_id).is_some();
+        let active = self.agent.agent_remembering_panes.contains_key(pane_id);
+        let claimed = self.finish_agent_remember_task(pane_id).is_some();
         pending || claimed || active
     }
 

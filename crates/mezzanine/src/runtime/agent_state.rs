@@ -859,7 +859,7 @@ pub struct RuntimeAgentSessionTitleClaim {
     /// Original nonwriting hold; never a separate queued task or expense owner.
     pub(crate) budget_wait: Option<super::agent::token_budget::title_wait::TitleWait>,
     /// Revoked before removing this exact publication claim, including rollback.
-    pub(crate) budget_fence: super::agent::token_budget::title_wait::TitleClaimFence,
+    pub(crate) budget_fence: super::agent::token_budget::claim_fence::AuxiliaryClaimFence,
     /// Unix milliseconds at which this claim was installed.
     pub claimed_at_unix_ms: u64,
     /// Worker lease applied to this claim.

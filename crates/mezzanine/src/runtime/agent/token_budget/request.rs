@@ -30,9 +30,8 @@ pub(crate) struct RuntimeBudgetRequestOwner {
     /// Retained through every concrete attempt/journal clone. This narrows
     /// expense allocation only; task liveness requires separate actor checks.
     pub(super) auxiliary: Option<super::auxiliary::RuntimeBudgetAuxiliaryClaim>,
-    /// Current title claim only; never keeps publication authority alive.
-    pub(in crate::runtime::agent) title_fence:
-        Option<std::sync::Weak<std::sync::atomic::AtomicBool>>,
+    /// Current title/remember claim only; never keeps send authority alive.
+    pub(in crate::runtime) auxiliary_fence: Option<std::sync::Weak<std::sync::atomic::AtomicBool>>,
     #[cfg(test)]
     pub(super) title_grant_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
 }
@@ -254,16 +253,19 @@ impl RuntimeBudgetAttemptWork {
     /// Called only after the native binding validation. This atomic admission
     /// point orders against claim retirement; no await or I/O follows before
     /// the original permit is consumed. Prior admission remains issued exposure.
-    fn title_is_live(&self) -> bool {
+    fn auxiliary_is_live(&self) -> bool {
         if !matches!(
             self.0.owner.auxiliary,
-            Some(super::auxiliary::RuntimeBudgetAuxiliaryClaim::Title { .. })
+            Some(
+                super::auxiliary::RuntimeBudgetAuxiliaryClaim::Title { .. }
+                    | super::auxiliary::RuntimeBudgetAuxiliaryClaim::Remember { .. }
+            )
         ) {
             return true;
         }
         self.0
             .owner
-            .title_fence
+            .auxiliary_fence
             .as_ref()
             .and_then(std::sync::Weak::upgrade)
             .is_some_and(|live| live.load(std::sync::atomic::Ordering::SeqCst))
@@ -374,14 +376,17 @@ impl RuntimeBudgetSendPermit {
     ) -> Result<std::result::Result<RuntimeBudgetIssuedAttempt, RuntimeBudgetUnusedAttempt>> {
         if !matches!(
             self.source.owner.auxiliary,
-            Some(super::auxiliary::RuntimeBudgetAuxiliaryClaim::Title { .. })
+            Some(
+                super::auxiliary::RuntimeBudgetAuxiliaryClaim::Title { .. }
+                    | super::auxiliary::RuntimeBudgetAuxiliaryClaim::Remember { .. }
+            )
         ) {
             return Ok(Ok(self.consume()?));
         }
         let source = self.source;
         match self
             .permit
-            .consume_if_live(|| RuntimeBudgetAttemptWork(source.clone()).title_is_live())?
+            .consume_if_live(|| RuntimeBudgetAttemptWork(source.clone()).auxiliary_is_live())?
         {
             Ok(issued) => Ok(Ok(RuntimeBudgetIssuedAttempt {
                 registered: RuntimeBudgetRegisteredAttempt(source),

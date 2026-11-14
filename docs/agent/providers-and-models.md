@@ -126,6 +126,14 @@ match an ordinary owner or a different auxiliary task merely because the
 conversation and root agree. Retaining this identity preserves original expense
 custody; it is not proof that a retired task is live or permission to resume it.
 
+Remember's monitored observer uses the task's original conversation, independently
+of its runtime-scoped prompt-cache key. The actual actor claim owns its send
+fence; dispatch and late-expense clones borrow it weakly. Stop, completion and
+replacement revoke that fence before removing the claim. A final native check
+after binding validation prevents an unissued retired request from sending,
+settling any unused grant instead. Requests admitted before Stop still settle
+their original known expense. This is not yet memory suspension or fair requeue.
+
 The runtime also has a staged retained-claim parking port. It accepts only a
 sealed capture of an observed nonwriting hold, releases scheduler capacity while
 keeping the original claim and conversation live, and fairly reacquires without

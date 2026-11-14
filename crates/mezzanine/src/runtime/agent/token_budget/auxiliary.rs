@@ -118,7 +118,7 @@ impl RuntimeSessionService {
             },
         )?;
         if let Some(owner) = &mut owner {
-            owner.title_fence = self
+            owner.auxiliary_fence = self
                 .agent
                 .claimed_agent_session_title_tasks
                 .get(&task.conversation_id)
@@ -282,7 +282,7 @@ impl RuntimeSessionService {
             store: entry.store.clone(),
             origin: capture.origin.clone(),
             auxiliary: Some(claim),
-            title_fence: None,
+            auxiliary_fence: None,
             #[cfg(test)]
             title_grant_gate: None,
         }))

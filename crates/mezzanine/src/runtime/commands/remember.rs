@@ -616,7 +616,7 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         self.require_auxiliary_accounting_capacity()?;
-        let budget_owner = self.claim_runtime_budget_remember(pane_id)?;
+        let mut budget_owner = self.claim_runtime_budget_remember(pane_id)?;
         let Some(task) = self.take_pending_agent_remember_task(pane_id) else {
             return Ok(None);
         };
@@ -634,7 +634,10 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
-        self.claim_agent_remember_task_state(pane_id, task.clone());
+        let fence = self.claim_agent_remember_task_state(pane_id, task.clone());
+        if let Some(owner) = &mut budget_owner {
+            owner.auxiliary_fence = Some(fence);
+        }
         Ok(Some(RuntimeAgentRememberDispatch {
             budget_owner,
             task,

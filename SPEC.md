@@ -16773,6 +16773,14 @@ ordinary purpose before allocating an attempt. A held capture MUST NOT match
 an ordinary owner or another auxiliary task solely through equal membership.
 Retained expense identity does not prove current task liveness or grant resume
 authority after retirement.
+Remember observers MUST use the task's captured conversation identity, never its
+runtime-scoped prompt-cache namespace or a current pane fallback. A claimed
+remember dispatch MUST borrow a weak send fence owned by its actual actor claim.
+Stop, completion and replacement MUST revoke that fence before removing the
+claim. Final native permit consumption MUST check it after binding validation,
+without intervening I/O or await; an unused grant MUST settle without HTTP.
+An already admitted request retains its original expense after Stop. These
+claim/expense boundaries alone do not implement memory suspension or fair requeue.
 For staged monitored-title suspension, lease exclusion MUST require the actual
 current title publication claim, its exact dispatch/claimed attempt and native
 membership, a still-positive original hold, and the original waiting future's

@@ -905,9 +905,9 @@ impl RuntimeSessionService {
         self.agent
             .session_title_tasks
             .note_claim(conversation_id, claimed_at_unix_ms);
-        let budget_fence = super::token_budget::title_wait::TitleClaimFence::new();
+        let budget_fence = super::token_budget::claim_fence::AuxiliaryClaimFence::new();
         if let Some(owner) = &mut budget_owner {
-            owner.title_fence = Some(budget_fence.capture());
+            owner.auxiliary_fence = Some(budget_fence.capture());
         }
         self.agent.claimed_agent_session_title_tasks.insert(
             conversation_id.to_string(),

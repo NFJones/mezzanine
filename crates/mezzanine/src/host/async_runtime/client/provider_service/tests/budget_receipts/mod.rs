@@ -7,6 +7,7 @@ mod dispatch;
 mod exposure;
 mod internal_retry;
 mod pre_send;
+mod remember_retirement;
 mod retirement;
 mod routing;
 mod title_wait;

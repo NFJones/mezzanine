@@ -8,28 +8,6 @@ use super::{
 };
 use crate::error::{MezError, Result};
 
-/// The actual publication claim owns the strong fence. Expense/request clones
-/// retain only a Weak reference. The final atomic read, after native binding
-/// validation, orders send admission against retirement without actor I/O/locks.
-#[derive(Debug, Clone)]
-pub(crate) struct TitleClaimFence(std::sync::Arc<std::sync::atomic::AtomicBool>);
-
-impl TitleClaimFence {
-    pub(crate) fn new() -> Self {
-        Self(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
-            true,
-        )))
-    }
-
-    pub(crate) fn capture(&self) -> std::sync::Weak<std::sync::atomic::AtomicBool> {
-        std::sync::Arc::downgrade(&self.0)
-    }
-
-    pub(crate) fn retire(&self) {
-        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct TitleWait {
     capture: RuntimeBudgetHeldAttempt,
