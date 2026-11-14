@@ -296,17 +296,20 @@ async fn runtime_budget_provider_wait_host_adopts_original_timer_edges() {
         }));
         handle.submit_runtime_events(stale).await.unwrap();
         assert!(handle.agent_turn_is_running(&turn.turn_id).await.unwrap());
-        assert!(
-            handle
-                .reacquire_budget_provider_claim(
-                    agent.clone(),
-                    turn.turn_id.clone(),
-                    7,
-                    capture.clone()
-                )
-                .await
-                .unwrap()
-        );
+        let mut lost_reacquire = Box::pin(handle.reacquire_budget_provider_claim(
+            agent.clone(),
+            turn.turn_id.clone(),
+            7,
+            capture.clone(),
+        ));
+        assert!(matches!(
+            futures_util::poll!(&mut lost_reacquire),
+            std::task::Poll::Pending
+        ));
+        drop(lost_reacquire);
+        // Same actor lane orders this observation after the consumed request.
+        // Losing its reply cannot lose the already-adopted original-key rearm.
+        assert!(handle.agent_turn_is_running(&turn.turn_id).await.unwrap());
         let resumed = handle.drain_timer_side_effects(64).await.unwrap();
         assert_eq!(resumed.iter().filter(|effect| matches!(effect,
             RuntimeSideEffect::ScheduleTimer { key: actual, delay_ms } if actual == &key && *delay_ms > 0
