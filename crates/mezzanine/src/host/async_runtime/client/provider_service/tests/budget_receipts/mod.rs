@@ -4,6 +4,7 @@
 
 mod admission;
 mod dispatch;
+mod exposure;
 mod internal_retry;
 mod pre_send;
 mod retirement;
