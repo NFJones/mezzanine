@@ -339,6 +339,9 @@ async fn runtime_budget_provider_wait_host_adopts_original_timer_edges() {
 /// Both queue pressure and a sibling's post-admission startup failure must keep
 /// the original claim and mandatory cancellation. Recovery uses the SAME host
 /// request/capture, not a replacement inference or a new scheduler claim.
+///
+/// Committed timer pressure is separately exercised below; this test covers the
+/// scheduler queue rather than the actor's mandatory-effect reserve.
 #[tokio::test]
 async fn runtime_budget_provider_wait_host_retains_pressure_and_sibling_failure() {
     for inject_failure in [false, true] {
@@ -471,6 +474,149 @@ async fn runtime_budget_provider_wait_host_retains_pressure_and_sibling_failure(
         };
         let ((), exit) = tokio::join!(client, actor.run());
         scene.service = exit.service;
+    }
+}
+
+/// A mandatory-effect reserve refusal must be nonmutating. Real original-key
+/// cancellation/rearm after draining pressure proves same-capture recovery;
+/// remaining Running ledger state alone would not establish timer custody.
+#[tokio::test]
+async fn runtime_budget_provider_wait_host_committed_timer_pressure_is_recoverable() {
+    use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+    use crate::runtime::{RuntimeTimerKey, RuntimeTimerKind};
+
+    for spare in 0..=2 {
+        let (mut scene, dispatch, _work, capture) = held().await;
+        let turn = &dispatch.turn;
+        let agent = AgentId::opaque(turn.agent_id.clone()).unwrap();
+        let key = RuntimeTimerKey::new(RuntimeTimerKind::ProviderClaim, &turn.turn_id, 7);
+        let service = std::mem::replace(&mut scene.service, test_runtime_service());
+        let (handle, mut actor) = AsyncRuntimeSessionActor::new(
+            service,
+            AsyncRuntimeActorConfig {
+                side_effect_buffer: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        actor.seed_budget_timer_pressure_for_tests(key.clone(), spare);
+        let client = async {
+            let parked = handle
+                .park_budget_provider_claim(agent.clone(), turn.turn_id.clone(), 7, capture.clone())
+                .await
+                .unwrap();
+            assert_eq!(parked, spare == 2, "initial spare capacity: {spare}");
+            // With two initial slots Park consumes at least its cancellation;
+            // otherwise Park must have refused before changing the claim.
+            assert!(
+                !handle
+                    .reacquire_budget_provider_claim(
+                        agent.clone(),
+                        turn.turn_id.clone(),
+                        7,
+                        capture.clone()
+                    )
+                    .await
+                    .unwrap()
+            );
+            assert!(handle.agent_turn_is_running(&turn.turn_id).await.unwrap());
+            assert!(
+                handle
+                    .pending_agent_provider_tasks()
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            let pressure = handle.drain_timer_side_effects(64).await.unwrap();
+            assert_eq!(
+                pressure
+                    .iter()
+                    .filter(|effect| matches!(effect,
+                        RuntimeSideEffect::ScheduleTimer { key: actual, .. } if actual == &key
+                    ))
+                    .count(),
+                1,
+                "only the initial claim timer, no refused rearm"
+            );
+            assert_eq!(
+                pressure
+                    .iter()
+                    .filter(|effect| matches!(effect,
+                        RuntimeSideEffect::CancelTimer { key: actual } if actual == &key
+                    ))
+                    .count(),
+                usize::from(parked)
+            );
+            if !parked {
+                assert!(
+                    handle
+                        .park_budget_provider_claim(
+                            agent.clone(),
+                            turn.turn_id.clone(),
+                            7,
+                            capture.clone()
+                        )
+                        .await
+                        .unwrap()
+                );
+                let canceled = handle.drain_timer_side_effects(64).await.unwrap();
+                assert_eq!(
+                    canceled
+                        .iter()
+                        .filter(|effect| matches!(effect,
+                            RuntimeSideEffect::CancelTimer { key: actual } if actual == &key
+                        ))
+                        .count(),
+                    1,
+                    "refused Park must not have consumed original cancellation"
+                );
+            }
+            assert!(
+                handle
+                    .reacquire_budget_provider_claim(
+                        agent.clone(),
+                        turn.turn_id.clone(),
+                        7,
+                        capture.clone()
+                    )
+                    .await
+                    .unwrap()
+            );
+            let resumed = handle.drain_timer_side_effects(64).await.unwrap();
+            assert_eq!(resumed.iter().filter(|effect| matches!(effect,
+                RuntimeSideEffect::ScheduleTimer { key: actual, delay_ms } if actual == &key && *delay_ms > 0
+            )).count(), 1);
+            assert!(
+                handle
+                    .reacquire_budget_provider_claim(
+                        agent.clone(),
+                        turn.turn_id.clone(),
+                        7,
+                        capture.clone()
+                    )
+                    .await
+                    .unwrap()
+            );
+            let duplicate = handle.drain_timer_side_effects(64).await.unwrap();
+            assert!(!duplicate.iter().any(|effect| matches!(effect,
+                RuntimeSideEffect::ScheduleTimer { key: actual, .. } if actual == &key
+            )));
+            assert!(
+                handle
+                    .pending_agent_provider_tasks()
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            handle.shutdown().await.unwrap();
+        };
+        let ((), exit) = tokio::join!(client, actor.run());
+        scene.service = exit.service;
+        assert!(
+            scene
+                .service
+                .agent_provider_claim_matches(&agent, &turn.turn_id, 7)
+        );
     }
 }
 

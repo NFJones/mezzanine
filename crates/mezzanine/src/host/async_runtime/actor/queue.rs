@@ -356,6 +356,38 @@ impl AsyncRuntimeSessionActor {
             .saturating_sub(self.side_effect_routes.non_persistence_len())
     }
 
+    /// Seeds real committed timer custody for budget host-request tests. These
+    /// inert fixture timers are drained, never executed. The original claim key
+    /// is registered first so refusal must preserve its actual timer ownership.
+    #[cfg(test)]
+    pub(crate) fn seed_budget_timer_pressure_for_tests(
+        &mut self,
+        original: RuntimeTimerKey,
+        spare: usize,
+    ) {
+        self.admit_committed_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+            key: original,
+            delay_ms: 30_000,
+        }])
+        .unwrap();
+        let available = self.available_committed_side_effect_capacity();
+        assert!(spare <= available);
+        self.admit_committed_side_effects(
+            (0..available - spare)
+                .map(|index| RuntimeSideEffect::ScheduleTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::PanePipeHealth,
+                        format!("budget-pressure-{index}"),
+                        1,
+                    ),
+                    delay_ms: 30_000,
+                })
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(self.available_committed_side_effect_capacity(), spare);
+    }
+
     /// Runs one admission attempt with an explicit capacity allowance.
     ///
     /// `allowance` extends the capacity verdict only for work the caller already
