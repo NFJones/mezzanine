@@ -902,10 +902,35 @@ impl AsyncRuntimeSessionActor {
                 self.apply_provider_claim_timer_event(&timer.key, timer.now_ms)
             }
             RuntimeTimerKind::CompactionClaim => {
-                if !self.timers.compaction_claim.remove(&timer.key) {
+                if !self.timers.compaction_claim.contains(&timer.key) {
                     self.record_ignored_timer_event();
                     return Ok(RuntimeTransition::default());
                 }
+                // Same-key callbacks may have been queued before park/resume.
+                // Retain bounded supervision for the positive original hold,
+                // or the exact unspent active lease, never a fresh allowance.
+                if self
+                    .service
+                    .replay_epoch_publication(&timer.key.owner_id, timer.key.generation)
+                    .is_none()
+                    && self
+                        .service
+                        .compaction_budget_timer_delay(
+                            &timer.key.owner_id,
+                            timer.key.generation,
+                            timer.now_ms,
+                        )
+                        .is_some()
+                {
+                    self.timers.compaction_claim.remove(&timer.key);
+                    self.service.retain_compaction_budget_watchdog(
+                        &timer.key.owner_id,
+                        timer.key.generation,
+                    );
+                    self.queue_fitting_compaction_budget_watchdogs()?;
+                    return Ok(RuntimeTransition::default());
+                }
+                self.timers.compaction_claim.remove(&timer.key);
                 if self
                     .service
                     .replay_epoch_publication(&timer.key.owner_id, timer.key.generation)

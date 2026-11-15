@@ -250,6 +250,18 @@ impl RuntimeBudgetAttemptWork {
         self.0.owner.auxiliary.as_ref()
     }
 
+    /// Matching logical generations cannot substitute another allocation's
+    /// fence. The held original must still borrow the actual live claim.
+    pub(super) fn matches_live_auxiliary_owner(&self, owner: &RuntimeBudgetRequestOwner) -> bool {
+        self.0
+            .owner
+            .auxiliary_fence
+            .as_ref()
+            .zip(owner.auxiliary_fence.as_ref())
+            .is_some_and(|(original, current)| original.ptr_eq(current))
+            && self.auxiliary_is_live()
+    }
+
     /// Called only after the native binding validation. This atomic admission
     /// point orders against claim retirement; no await or I/O follows before
     /// the original permit is consumed. Prior admission remains issued exposure.

@@ -1033,6 +1033,23 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Observe only the actual parked compaction allocation.
+    #[cfg(test)]
+    pub(crate) async fn budget_compaction_claim_is_quiescent(
+        &self,
+        pane: String,
+        generation: u64,
+    ) -> Result<bool> {
+        self.request(
+            |reply| AsyncRuntimeRequest::BudgetCompactionClaimIsQuiescent {
+                pane,
+                generation,
+                reply,
+            },
+        )
+        .await?
+    }
+
     /// Adopt original auxiliary resume, never native send permission.
     pub(crate) async fn resume_budget_auxiliary_claim(
         &self,

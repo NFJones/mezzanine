@@ -1234,6 +1234,7 @@ async fn dispatch_agent_provider_side_effects(
                     }
                 };
                 let owner = ProviderWorkerOwner::compaction(&dispatch);
+                let budget_waiter = handle.clone();
                 spawn_owned_agent_provider_worker(
                     workers,
                     owners,
@@ -1243,7 +1244,13 @@ async fn dispatch_agent_provider_side_effects(
                         pane_id,
                         dispatch,
                         drains.clone(),
-                        execute_runtime_agent_compaction_dispatch,
+                        move |dispatch, observer| {
+                            execute_runtime_agent_compaction_dispatch_with_waiter(
+                                dispatch,
+                                observer,
+                                Some(budget_waiter),
+                            )
+                        },
                     ),
                 );
             }
@@ -2672,9 +2679,20 @@ async fn execute_runtime_agent_provider_dispatch_with_waiter(
 }
 
 /// Executes one model-backed conversation compaction request.
+#[cfg(test)]
 async fn execute_runtime_agent_compaction_dispatch(
     dispatch: RuntimeAgentCompactionDispatch,
     observer: ProviderWireRequestObserver,
+) -> Result<mez_agent::ModelResponse> {
+    execute_runtime_agent_compaction_dispatch_with_waiter(dispatch, observer, None).await
+}
+
+/// Hold inside the original model wave; the actor conserves its admitted lease
+/// and adopts a resumed watchdog before native authorization is reconsidered.
+async fn execute_runtime_agent_compaction_dispatch_with_waiter(
+    dispatch: RuntimeAgentCompactionDispatch,
+    observer: ProviderWireRequestObserver,
+    budget_waiter: Option<AsyncRuntimeSessionHandle>,
 ) -> Result<mez_agent::ModelResponse> {
     if !dispatch.delivery.producer_registered() {
         return Err(MezError::invalid_state(
@@ -2692,7 +2710,18 @@ async fn execute_runtime_agent_compaction_dispatch(
     if let Some(owner) = &_budget_owner {
         owner.validate_request(&task.conversation_id)?;
     }
-    let observer = budget_admission::install_request_source(observer, _budget_owner.as_ref())?;
+    let observer = match (_budget_owner.as_ref(), budget_waiter) {
+        (Some(owner), Some(handle)) => {
+            let clock = crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline::default();
+            observer
+                .with_budget_deadline(clock.clone())
+                .with_budget_receipt_source(std::sync::Arc::new(
+                    budget_admission::BudgetRequestAdmission::new(owner.clone())
+                        .with_waiter(handle, clock),
+                ))?
+        }
+        (owner, _) => budget_admission::install_request_source(observer, owner)?,
+    };
     let source = task.replay_source.as_ref().ok_or_else(|| {
         MezError::invalid_state("compaction dispatch lacks its frozen epoch source")
     })?;

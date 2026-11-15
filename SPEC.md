@@ -16783,6 +16783,20 @@ with no intervening I/O or await before original permit consumption. Refused
 unused grants MUST retain withdrawal and terminal receipt custody with no HTTP;
 already-admitted exposure retains its original expense. These fences alone do
 not suspend compaction claim timers, release fair capacity or activate budgets.
+For activated memberships, monitored compaction MUST retain its original model
+wave through a positive nonwriting hold. Parking MUST match the actual live
+claim allocation, original native membership and hold epoch, and the original
+waiting future's lifetime. The actor MUST adopt timer replacement before park
+acknowledgment, retaining only the unspent original lease. A paced exact-claim
+watchdog MUST supervise the parked future; a dead or revoked hold MUST NOT defer
+expiry. Resume MUST preserve human Pause, adopt the remaining lease before
+fresh native authorization, and never renew it on duplicate calls or repeated
+holds. Stale pre-park callbacks MUST NOT expire a resumed remaining lease.
+Queue pressure MUST retain one rearm obligation in the exact original claim,
+not discard the watchdog or replay its consumed callback. Capacity progress
+MUST retry that obligation; actual timer offer MUST deduct queued active time.
+Publication supervision remains separate. This does not establish fair
+auxiliary capacity release/requeue or activate budget membership.
 Remember observers MUST use the task's captured conversation identity, never its
 runtime-scoped prompt-cache namespace or a current pane fallback. A claimed
 remember dispatch MUST borrow a weak send fence owned by its actual actor claim.
@@ -16801,7 +16815,7 @@ connection does not enforce a cumulative active allowance: existing independent
 per-exchange HTTP deadlines still begin at transport execution. A future memory
 allowance consumer MUST preserve the original finite allowance across parks,
 not reset it on release. This connection alone does not establish fair auxiliary
-capacity release/requeue, compaction suspension or production budget activation.
+capacity release/requeue or production budget activation.
 For staged monitored-title suspension, lease exclusion MUST require the actual
 current title publication claim, its exact dispatch/claimed attempt and native
 membership, a still-positive original hold, and the original waiting future's

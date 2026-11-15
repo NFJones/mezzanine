@@ -3133,11 +3133,37 @@ impl AsyncRuntimeSessionActor {
                 waiter,
                 reply,
             } => {
-                let result = self.service.park_budget_auxiliary_claim(
-                    capture,
-                    waiter,
-                    crate::runtime::current_unix_millis(),
-                );
+                let result = if let Some((pane, generation)) = capture.compaction_subject() {
+                    let key =
+                        RuntimeTimerKey::new(RuntimeTimerKind::CompactionClaim, pane, generation);
+                    if self.available_committed_side_effect_capacity() < 2 {
+                        Ok(false)
+                    } else if !self.timers.compaction_claim.contains(&key)
+                        && !self
+                            .service
+                            .compaction_budget_watchdog_pending(pane, generation)
+                    {
+                        Err(MezError::conflict(
+                            "original compaction watchdog unavailable",
+                        ))
+                    } else {
+                        (|| {
+                            let transition = self.service.park_budget_compaction_claim(
+                                capture,
+                                waiter,
+                                crate::runtime::current_unix_millis(),
+                            )?;
+                            self.admit_committed_side_effects(transition.side_effects)?;
+                            Ok(true)
+                        })()
+                    }
+                } else {
+                    self.service.park_budget_auxiliary_claim(
+                        capture,
+                        waiter,
+                        crate::runtime::current_unix_millis(),
+                    )
+                };
                 let _ = reply.send(result);
                 false
             }
@@ -3146,10 +3172,40 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(Ok(self.service.budget_remember_claim_is_quiescent(&pane)));
                 false
             }
-            AsyncRuntimeRequest::ResumeBudgetAuxiliaryClaim { capture, reply } => {
-                let result = self
+            #[cfg(test)]
+            AsyncRuntimeRequest::BudgetCompactionClaimIsQuiescent {
+                pane,
+                generation,
+                reply,
+            } => {
+                let _ = reply.send(Ok(self
                     .service
-                    .resume_budget_auxiliary_claim(&capture, crate::runtime::current_unix_millis());
+                    .budget_compaction_claim_is_quiescent(&pane, generation)));
+                false
+            }
+            AsyncRuntimeRequest::ResumeBudgetAuxiliaryClaim { capture, reply } => {
+                let result = if capture.compaction_subject().is_some() {
+                    if self.available_committed_side_effect_capacity() < 2 {
+                        Ok(false)
+                    } else {
+                        (|| {
+                            let transition = self.service.resume_budget_compaction_claim(
+                                &capture,
+                                crate::runtime::current_unix_millis(),
+                            )?;
+                            let Some(transition) = transition else {
+                                return Ok(false);
+                            };
+                            self.admit_committed_side_effects(transition.side_effects)?;
+                            Ok(true)
+                        })()
+                    }
+                } else {
+                    self.service.resume_budget_auxiliary_claim(
+                        &capture,
+                        crate::runtime::current_unix_millis(),
+                    )
+                };
                 let _ = reply.send(result);
                 false
             }
@@ -3745,6 +3801,7 @@ impl AsyncRuntimeSessionActor {
                         ),
                         delay_ms: DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
                     };
+                    let lease_started_at = crate::runtime::current_unix_millis();
                     match self.admit_worker_claim_lease(
                         WorkerClaimLease::Compaction {
                             pane_id: &pane_id,
@@ -3752,7 +3809,12 @@ impl AsyncRuntimeSessionActor {
                         },
                         vec![timer],
                     ) {
-                        Ok(true) => {}
+                        Ok(true) => self.service.note_compaction_budget_lease(
+                            &pane_id,
+                            task_generation,
+                            lease_started_at,
+                            DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
+                        ),
                         Ok(false) => {
                             let _ = reply.send(Ok(None));
                             self.notify_event_delivery();

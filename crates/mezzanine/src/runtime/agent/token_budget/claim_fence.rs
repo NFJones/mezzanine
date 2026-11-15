@@ -37,4 +37,5 @@ pub(crate) struct RememberClaim {
 pub(crate) struct CompactionClaim {
     pub(crate) task: crate::runtime::RuntimeAgentCompactionTask,
     pub(crate) budget_fence: AuxiliaryClaimFence,
+    pub(crate) budget_lease: Option<super::compaction_wait::CompactionLease>,
 }

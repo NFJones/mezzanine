@@ -147,7 +147,10 @@ impl Source {
         reason: crate::storage::token_usage::budget::admission::BudgetAdmissionHold,
         previous: Option<&crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState>,
     ) -> Result<crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState> {
-        let ordinary = if capture.is_title() || capture.is_remember() {
+        let ordinary = if capture.is_title()
+            || capture.is_remember()
+            || capture.compaction_subject().is_some()
+        {
             None
         } else {
             Some((

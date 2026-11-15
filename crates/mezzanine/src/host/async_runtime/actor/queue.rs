@@ -356,6 +356,27 @@ impl AsyncRuntimeSessionActor {
             .saturating_sub(self.side_effect_routes.non_persistence_len())
     }
 
+    /// Supervision has one pending bit in each actual claim, not a replayable
+    /// event or unbounded timer queue. A due callback is acknowledged even at
+    /// capacity; only a fitting prefix is adopted and progress retries the rest.
+    pub(super) fn queue_fitting_compaction_budget_watchdogs(&mut self) -> Result<()> {
+        let pending = self
+            .service
+            .pending_compaction_budget_watchdogs(crate::runtime::current_unix_millis());
+        for (pane, generation, delay_ms) in pending {
+            if self.available_committed_side_effect_capacity() == 0 {
+                break;
+            }
+            self.admit_committed_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(RuntimeTimerKind::CompactionClaim, &pane, generation),
+                delay_ms,
+            }])?;
+            self.service
+                .adopt_compaction_budget_watchdog(&pane, generation);
+        }
+        Ok(())
+    }
+
     /// Seeds real committed timer custody for budget host-request tests. These
     /// inert fixture timers are drained, never executed. The original claim key
     /// is registered first so refusal must preserve its actual timer ownership.

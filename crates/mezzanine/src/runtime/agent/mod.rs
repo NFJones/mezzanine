@@ -3877,7 +3877,11 @@ impl RuntimeSessionService {
         }
         self.agent.claimed_agent_compaction_tasks.insert(
             key,
-            token_budget::claim_fence::CompactionClaim { task, budget_fence },
+            token_budget::claim_fence::CompactionClaim {
+                task,
+                budget_fence,
+                budget_lease: None,
+            },
         );
     }
 

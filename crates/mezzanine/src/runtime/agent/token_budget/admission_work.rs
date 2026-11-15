@@ -77,6 +77,22 @@ pub(crate) struct RuntimeBudgetHeldAttempt {
 }
 
 impl RuntimeBudgetHeldAttempt {
+    pub(crate) fn compaction_subject(&self) -> Option<(&str, u64)> {
+        match self.auxiliary_claim()? {
+            super::auxiliary::RuntimeBudgetAuxiliaryClaim::Compaction { pane, generation } => {
+                Some((pane, *generation))
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn matches_live_auxiliary_owner(
+        &self,
+        owner: &super::request::RuntimeBudgetRequestOwner,
+    ) -> bool {
+        self.matches_owner(owner) && self.work.matches_live_auxiliary_owner(owner)
+    }
+
     pub(crate) fn is_remember(&self) -> bool {
         matches!(
             self.work.auxiliary_claim(),

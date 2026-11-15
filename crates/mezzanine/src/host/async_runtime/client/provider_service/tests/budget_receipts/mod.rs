@@ -3,6 +3,7 @@
 //! staged bridge does not claim production activation or retirement release.
 
 mod admission;
+mod compaction_wait;
 mod dispatch;
 mod exposure;
 mod internal_retry;

@@ -28,6 +28,7 @@ use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 pub(crate) mod admission_work;
 pub(crate) mod auxiliary;
 pub(crate) mod claim_fence;
+mod compaction_wait;
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "retained provider wait assembly remains staged")

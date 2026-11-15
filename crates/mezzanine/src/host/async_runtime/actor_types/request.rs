@@ -1040,6 +1040,12 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         pane: String,
         reply: oneshot::Sender<Result<bool>>,
     },
+    #[cfg(test)]
+    BudgetCompactionClaimIsQuiescent {
+        pane: String,
+        generation: u64,
+        reply: oneshot::Sender<Result<bool>>,
+    },
     /// Parks a positively nonwriting original auxiliary without inventing a turn.
     ParkBudgetAuxiliaryClaim {
         capture: crate::runtime::RuntimeBudgetHeldAttempt,
@@ -1857,6 +1863,8 @@ impl AsyncRuntimeRequest {
             Self::BudgetTitleClaimIsQuiescent { .. } => Family::Provider,
             #[cfg(test)]
             Self::BudgetRememberClaimIsQuiescent { .. } => Family::Provider,
+            #[cfg(test)]
+            Self::BudgetCompactionClaimIsQuiescent { .. } => Family::Provider,
             Self::SubmitRuntimeEvents { .. } => Family::Event,
             Self::DrainRuntimeSideEffects { .. }
             | Self::QueueRuntimeSideEffects { .. }

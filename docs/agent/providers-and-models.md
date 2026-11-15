@@ -133,7 +133,21 @@ Dispatch, publication and late-expense clones cannot revive that allocation.
 The final native check follows binding validation without I/O or await before
 permit consumption. A refused unused grant settles without HTTP, while an
 already-admitted request keeps its original expense. This does not yet suspend
-the actor's compaction lease or establish fair auxiliary capacity release.
+the actor's compaction lease by itself or establish fair auxiliary capacity release.
+
+For activated memberships, the monitored compactor now retains the same model
+wave through positive budget holds. The actual claim stores a bounded wait with
+the original native owner, live allocation fence, positive hold epoch and weak
+original-future lifetime. The actor replaces the active watchdog before
+acknowledging parking, retaining the original remaining lease rather than a
+fresh allowance. A paced exact-claim watchdog still retires dead or revoked
+parked work. Resume preserves human Pause and installs that remaining lease
+before fresh native authorization. Duplicate calls cannot extend it; stale
+pre-park timer callbacks cannot expire a resumed lease early. This does not yet
+establish fair auxiliary capacity release/requeue or production activation.
+If the timer lane is full, the actual claim retains one bounded watchdog rearm
+obligation. Capacity progress retries it without replaying the original event
+or failing the shared timer service; the actual offer deducts queued active time.
 
 Remember's monitored observer uses the task's original conversation, independently
 of its runtime-scoped prompt-cache key. The actual actor claim owns its send
