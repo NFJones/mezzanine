@@ -16810,11 +16810,13 @@ claim MUST validate the exact observation, native membership, hold epoch and
 original future lifetime on each paced read. Only that current non-resumed hold
 is quiescent for human Pause. Actor resume MUST preserve independent human gates
 and precede fresh native authorization; Stop MUST remain retired after a lift.
-The shared parking clock records only acknowledged suspension. This memory
-connection does not enforce a cumulative active allowance: existing independent
-per-exchange HTTP deadlines still begin at transport execution. A future memory
-allowance consumer MUST preserve the original finite allowance across parks,
-not reset it on release. This connection alone does not establish fair auxiliary
+The original monitored memory request MUST enforce the existing finite provider
+timeout as one cumulative active allowance, excluding only actor-acknowledged
+nonwriting parks. Repeated holds and policy lifts MUST NOT renew that allowance.
+Independent per-exchange HTTP deadlines still begin at transport execution.
+Local active-time expiry MUST preserve received partial usage in the original
+native receipts and memory failure event without summing overlapping totals.
+This connection alone does not establish fair auxiliary
 capacity release/requeue or production budget activation.
 For staged monitored-title suspension, lease exclusion MUST require the actual
 current title publication claim, its exact dispatch/claimed attempt and native

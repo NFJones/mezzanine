@@ -163,11 +163,13 @@ bounded wait, qualified by its original observation, native membership, positive
 hold epoch and the waiting future's lifetime. Paced reads recheck it even while
 policy remains exhausted. A current non-resumed hold is quiescent for human Pause;
 lifting policy cannot clear human Pause or revive Stop. Actor resume precedes
-fresh native authorization. The shared clock records acknowledged parking, but
-remember has no cumulative active-allowance consumer yet; existing per-exchange
-HTTP deadlines begin at transport execution. Connecting a finite original memory
-allowance without resetting it across parks remains unfinished, as does fair
-auxiliary capacity release/requeue.
+fresh native authorization. One original request-wide active allowance uses the
+existing provider timeout and excludes only acknowledged nonwriting parks.
+Repeated holds or policy lifts cannot reset it. Independent per-exchange HTTP
+deadlines still begin at transport execution. Local expiry preserves received
+partial usage in the original receipts and memory failure event, without
+double-counting overlapping totals. Fair auxiliary capacity release/requeue
+remains unfinished.
 
 The runtime also has a staged retained-claim parking port. It accepts only a
 sealed capture of an observed nonwriting hold, releases scheduler capacity while

@@ -2115,9 +2115,11 @@ where
                 }
                 flush_pending_provider_observations(&handle, &pending).await?;
                 let reported = take_completed_auxiliary_usage(&drains, &drain_key)?;
-                let join_failed = result.is_err();
                 let completion = remember_worker_event(pane_id, observation_id, result);
-                return Ok(Some(if join_failed {
+                // Local active-time expiry cancels the request future without
+                // a terminal provider error carrying its partial SSE expense.
+                // Both views describe the same original request, not new cost.
+                return Ok(Some(if !completion.1 {
                     with_reported_auxiliary_failure_usage(completion, reported)?
                 } else { completion }));
             }
@@ -2778,14 +2780,32 @@ async fn execute_runtime_agent_remember_dispatch(
     execute_runtime_agent_remember_dispatch_with_waiter(dispatch, observer, None).await
 }
 
-/// Monitored memory keeps this original future through a positive hold. Its
-/// shared clock records acknowledged parks; unlike ordinary turns, remember
-/// has no cumulative active-allowance consumer yet. Per-exchange HTTP deadlines
-/// remain independent. Direct fixtures retain the no-wait refusal path.
+/// Monitored memory keeps this original future and finite provider allowance
+/// through positive holds. Per-exchange HTTP deadlines remain independent;
+/// direct fixtures without a monitored clock keep the no-wait refusal path.
 async fn execute_runtime_agent_remember_dispatch_with_waiter(
     dispatch: RuntimeAgentRememberDispatch,
     observer: ProviderWireRequestObserver,
     budget_waiter: Option<AsyncRuntimeSessionHandle>,
+) -> Result<mez_agent::ModelResponse> {
+    execute_runtime_agent_remember_dispatch_with_allowance(
+        dispatch,
+        observer,
+        budget_waiter,
+        Duration::from_millis(mez_agent::DEFAULT_PROVIDER_TIMEOUT_MS),
+    )
+    .await
+}
+
+/// One original request-wide clock, including any adapter-internal exchanges.
+/// Only actor-acknowledged nonwriting parks are excluded; neither a policy lift
+/// nor a retry creates a fresh allowance. Tests shorten this existing allowance
+/// without changing production HTTP deadlines or process-wide settings.
+async fn execute_runtime_agent_remember_dispatch_with_allowance(
+    dispatch: RuntimeAgentRememberDispatch,
+    observer: ProviderWireRequestObserver,
+    budget_waiter: Option<AsyncRuntimeSessionHandle>,
+    allowance: Duration,
 ) -> Result<mez_agent::ModelResponse> {
     let RuntimeAgentRememberDispatch {
         budget_owner: _budget_owner,
@@ -2807,43 +2827,20 @@ async fn execute_runtime_agent_remember_dispatch_with_waiter(
         }
         (owner, _) => budget_admission::install_request_source(observer, owner)?,
     };
-    match provider {
-        RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-            observed_provider_request(
-                &provider,
-                &observer,
-                ProviderRequestPurpose::Memory,
-                &task.request,
-            )
-            .await
-        }
-        RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
-            observed_provider_request(
-                &provider,
-                &observer,
-                ProviderRequestPurpose::Memory,
-                &task.request,
-            )
-            .await
-        }
-        RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
-            observed_provider_request(
-                &provider,
-                &observer,
-                ProviderRequestPurpose::Memory,
-                &task.request,
-            )
-            .await
-        }
-        RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
-            observed_provider_request(
-                &provider,
-                &observer,
-                ProviderRequestPurpose::Memory,
-                &task.request,
-            )
-            .await
-        }
+    let request = observed_dispatch_provider_request(
+        &provider,
+        &observer,
+        ProviderRequestPurpose::Memory,
+        &task.request,
+    );
+    match observer.budget_deadline() {
+        Some(clock) => clock.timeout(allowance, request).await.map_err(|()| {
+            MezError::invalid_state(format!(
+                "memory request exceeded original active allowance of {} ms",
+                allowance.as_millis(),
+            ))
+        })?,
+        None => request.await,
     }
 }
 

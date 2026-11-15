@@ -459,9 +459,10 @@ pub(super) fn take_completed_auxiliary_usage(
     Ok(usage)
 }
 
-/// Supplies reported expense only when no terminal request result survived its
-/// join. Unexpected success/event kinds remain fatal rather than fabricating
-/// response content or silently dropping cost under a mismatched owner.
+/// Reconciles retained expense with an original failed auxiliary result. These
+/// are overlapping request totals, so take component maxima rather than sum.
+/// This also covers local timeout after partial SSE, without a provider error.
+/// Unexpected success/event kinds remain fatal under a mismatched owner.
 pub(super) fn with_reported_auxiliary_failure_usage(
     completion: (RuntimeEvent, bool),
     reported: mez_agent::ModelTokenUsage,
@@ -479,7 +480,15 @@ pub(super) fn with_reported_auxiliary_failure_usage(
             usage,
             outcome: AgentSessionTitleOutcome::Rejected(_),
             ..
-        }) => *usage = reported,
+        }) => {
+            usage.input_tokens = usage.input_tokens.max(reported.input_tokens);
+            usage.output_tokens = usage.output_tokens.max(reported.output_tokens);
+            usage.reasoning_tokens = usage.reasoning_tokens.max(reported.reasoning_tokens);
+            usage.cached_input_tokens = usage.cached_input_tokens.max(reported.cached_input_tokens);
+            usage.cache_write_input_tokens = usage
+                .cache_write_input_tokens
+                .max(reported.cache_write_input_tokens);
+        }
         _ => {
             return Err(MezError::invalid_state(
                 "lost auxiliary request produced an unexpected failure event",
