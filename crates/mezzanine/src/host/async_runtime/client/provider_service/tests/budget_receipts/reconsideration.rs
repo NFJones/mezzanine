@@ -9,20 +9,35 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn budget_reconsideration_physical_title_and_memory_share_finite_window() {
-    Box::pin(qualify(true, false)).await;
+    Box::pin(qualify(true, false, false)).await;
 }
 
 #[tokio::test]
 async fn budget_reconsideration_physical_unlimited_preserves_concurrent_windows() {
-    Box::pin(qualify(false, false)).await;
+    Box::pin(qualify(false, false, false)).await;
 }
 
 #[tokio::test]
 async fn budget_reconsideration_physical_independent_finite_roots_progress() {
-    Box::pin(qualify(true, true)).await;
+    Box::pin(qualify(true, true, false)).await;
 }
 
-async fn qualify(finite: bool, independent: bool) {
+#[tokio::test]
+async fn budget_reconsideration_physical_ordinary_and_title_share_finite_window() {
+    Box::pin(qualify(true, false, true)).await;
+}
+
+#[tokio::test]
+async fn budget_reconsideration_physical_ordinary_unlimited_preserves_concurrent_windows() {
+    Box::pin(qualify(false, false, true)).await;
+}
+
+#[tokio::test]
+async fn budget_reconsideration_physical_ordinary_independent_finite_roots_progress() {
+    Box::pin(qualify(true, true, true)).await;
+}
+
+async fn qualify(finite: bool, independent: bool, ordinary: bool) {
     let Prepared {
         mut service,
         dispatch,
@@ -34,7 +49,6 @@ async fn qualify(finite: bool, independent: bool) {
         output: TokenLimit::Unlimited,
     })
     .await;
-    drop(dispatch);
     let primary = service
         .session()
         .clients()
@@ -43,30 +57,48 @@ async fn qualify(finite: bool, independent: bool) {
         .unwrap()
         .id
         .clone();
-    service
-        .execute_agent_shell_command(&primary, "/stop")
-        .unwrap();
     service.set_config_root(root.0.as_ref().unwrap().clone());
-    service
-        .execute_agent_shell_command(&primary, "/remember Preserve original competition custody.")
-        .unwrap();
-    let observation = service
-        .pending_agent_remember_observation_id("%1")
-        .unwrap()
-        .to_owned();
-    let preparation = service
-        .prepare_runtime_budget_auxiliary(&crate::runtime::RuntimeBudgetAuxiliarySource::Remember {
-            pane: "%1".into(),
-            observation: observation.clone(),
-        })
-        .unwrap()
-        .unwrap();
-    let prepared = RuntimeSessionService::execute_agent_provider_preparation(preparation).await;
-    service.apply_agent_provider_preparation(prepared).unwrap();
-    let mut memory = service
-        .claim_agent_remember_task("%1", &observation)
-        .unwrap()
-        .unwrap();
+    let (mut ordinary_dispatch, mut memory) = if ordinary {
+        (Some(dispatch), None)
+    } else {
+        drop(dispatch);
+        service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+        service
+            .execute_agent_shell_command(
+                &primary,
+                "/remember Preserve original competition custody.",
+            )
+            .unwrap();
+        let observation = service
+            .pending_agent_remember_observation_id("%1")
+            .unwrap()
+            .to_owned();
+        let preparation = service
+            .prepare_runtime_budget_auxiliary(
+                &crate::runtime::RuntimeBudgetAuxiliarySource::Remember {
+                    pane: "%1".into(),
+                    observation: observation.clone(),
+                },
+            )
+            .unwrap()
+            .unwrap();
+        let prepared = RuntimeSessionService::execute_agent_provider_preparation(preparation).await;
+        service.apply_agent_provider_preparation(prepared).unwrap();
+        (
+            None,
+            Some(
+                service
+                    .claim_agent_remember_task("%1", &observation)
+                    .unwrap()
+                    .unwrap(),
+            ),
+        )
+    };
+    let ordinary_turn = ordinary_dispatch
+        .as_ref()
+        .map(|dispatch| dispatch.turn.turn_id.clone());
     let title_conversation = if independent {
         let pane = service
             .session_mut_for_tests()
@@ -107,8 +139,11 @@ async fn qualify(finite: bool, independent: bool) {
     let gates: Vec<_> = (0..2)
         .map(|_| Arc::new((tokio::sync::Notify::new(), tokio::sync::Notify::new())))
         .collect();
-    memory
-        .budget_owner
+    ordinary_dispatch
+        .as_mut()
+        .map(|dispatch| &mut dispatch.budget_owner)
+        .or_else(|| memory.as_mut().map(|dispatch| &mut dispatch.budget_owner))
+        .unwrap()
         .as_mut()
         .unwrap()
         .gate_title_grant_for_tests(gates[0].clone());
@@ -126,14 +161,26 @@ async fn qualify(finite: bool, independent: bool) {
             .with_streaming_options_for_test(false)
             .unwrap()
             .with_endpoint(format!("http://{}/v1", listener.local_addr().unwrap()));
-    memory.provider =
-        crate::runtime::RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider.clone());
+    if let Some(dispatch) = &mut ordinary_dispatch {
+        dispatch.provider = crate::runtime::RuntimeAgentProviderDispatchProvider::OpenAiCompatible(
+            provider.clone(),
+        );
+    } else {
+        memory.as_mut().unwrap().provider =
+            crate::runtime::RuntimeAgentProviderDispatchProvider::OpenAiCompatible(
+                provider.clone(),
+            );
+    }
     title.provider =
         crate::runtime::RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider);
     let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let count = sends.clone();
+    // Gate release order identifies the next exchange without guessing from
+    // provider-specific HTTP body markers. At most two response choices exist.
+    let (responses, mut response_kind) = tokio::sync::mpsc::channel::<bool>(2);
     let server = tokio::spawn(async move {
         for _ in 0..2 {
+            let ordinary_response = response_kind.recv().await.unwrap();
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut bytes = Vec::new();
             loop {
@@ -158,7 +205,12 @@ async fn qualify(finite: bool, independent: bool) {
                 assert!(bytes.len() < 1024 * 1024);
             }
             count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let body = serde_json::json!({"id":"competition","choices":[{"message":{"role":"assistant","content":"Original title"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}).to_string();
+            let content = if ordinary_response {
+                serde_json::json!({"rationale":"fixture","actions":[{"type":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"original ordinary completed"}]}).to_string()
+            } else {
+                "Original title".to_owned()
+            };
+            let body = serde_json::json!({"id":"competition","choices":[{"index":0,"message":{"role":"assistant","content":content},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}).to_string();
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
         }
     });
@@ -167,11 +219,21 @@ async fn qualify(finite: bool, independent: bool) {
     let control = async {
         let mh = handle.clone();
         let th = handle.clone();
-        let mut workers = vec![
-            Some(tokio::spawn(monitor_runtime_agent_remember_dispatch(
+        let first_worker = if let Some(dispatch) = ordinary_dispatch {
+            let agent = AgentId::opaque(dispatch.turn.agent_id.clone()).unwrap();
+            let turn = dispatch.turn.turn_id.clone();
+            tokio::spawn(monitor_runtime_agent_provider_dispatch(
+                handle.clone(),
+                agent,
+                turn,
+                dispatch,
+                drains.clone(),
+            ))
+        } else {
+            tokio::spawn(monitor_runtime_agent_remember_dispatch(
                 handle.clone(),
                 "%1".into(),
-                memory,
+                memory.unwrap(),
                 drains.clone(),
                 move |dispatch, observer| {
                     Box::pin(execute_runtime_agent_remember_dispatch_with_waiter(
@@ -180,7 +242,10 @@ async fn qualify(finite: bool, independent: bool) {
                         Some(mh),
                     ))
                 },
-            ))),
+            ))
+        };
+        let mut workers = vec![
+            Some(first_worker),
             Some(tokio::spawn(monitor_runtime_agent_session_title_dispatch(
                 handle.clone(),
                 title,
@@ -196,12 +261,19 @@ async fn qualify(finite: bool, independent: bool) {
         ];
         let exercise: std::result::Result<bool, String> =
             async {
+                let mut ordinary_parked = false;
                 tokio::time::timeout(Duration::from_secs(5), async {
                     loop {
-                        if handle
-                            .budget_remember_claim_is_quiescent("%1".into())
-                            .await
-                            .unwrap()
+                        let first_parked = if let Some(turn) = &ordinary_turn {
+                            ordinary_parked |= handle.drain_timer_side_effects(64).await.unwrap().iter().any(|effect| matches!(effect,
+                                crate::runtime::RuntimeSideEffect::CancelTimer { key }
+                                if key.kind == crate::runtime::RuntimeTimerKind::ProviderClaim && key.owner_id == *turn && key.generation == 7
+                            ));
+                            ordinary_parked
+                        } else {
+                            handle.budget_remember_claim_is_quiescent("%1".into()).await.unwrap()
+                        };
+                        if first_parked
                             && handle
                                 .budget_title_claim_is_quiescent(title_conversation.clone())
                                 .await
@@ -236,7 +308,13 @@ async fn qualify(finite: bool, independent: bool) {
                     tokio::time::timeout(Duration::from_millis(2200), gates[second].0.notified())
                         .await
                         .is_ok();
+                responses.send(ordinary && first == 0).await.unwrap();
                 gates[first].1.notify_one();
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while sends.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }).await.map_err(|_| "first physical request missing".to_owned())?;
                 if finite && !independent && concurrent {
                     // A disabled-ordering regression probe may resume both.
                     // Settle the first exchange before releasing the second,
@@ -254,17 +332,22 @@ async fn qualify(finite: bool, independent: bool) {
                         .await
                         .map_err(|_| "second original did not recover".to_owned())?;
                 }
+                responses.send(ordinary && second == 0).await.unwrap();
                 gates[second].1.notify_one();
-                for worker in &mut workers {
+                for (index, worker) in workers.iter_mut().enumerate() {
                     let joined =
                         tokio::time::timeout(Duration::from_secs(10), worker.as_mut().unwrap())
                             .await
                             .map_err(|_| "original monitor did not finish".to_owned())?;
                     worker.take();
-                    joined
+                    let completion = joined
                         .map_err(|e| e.to_string())?
                         .map_err(|e| e.to_string())?
                         .ok_or_else(|| "original completion missing".to_owned())?;
+                    if ordinary && index == 0 && !matches!(completion.0,
+                        RuntimeEvent::AgentProvider(AgentProviderEvent::Completed { .. })) {
+                        return Err("original ordinary did not complete successfully".to_owned());
+                    }
                 }
                 Ok(concurrent)
             }
