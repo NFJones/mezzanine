@@ -4,6 +4,7 @@
 
 mod admission;
 mod compaction_wait;
+mod compaction_waves;
 mod completion_wait;
 mod dispatch;
 mod exposure;
