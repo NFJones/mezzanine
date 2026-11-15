@@ -16805,6 +16805,14 @@ clock. Exact authorized human Resume MUST clear only the human reason and retain
 that frozen request/claim/capture; it MUST NOT append replacement model guidance,
 offer another provider continuation, or clear budget exhaustion. Active, revoked,
 stale or rebound holds MUST NOT qualify as nonwriting proof.
+The code-owned Routing wire turn derived by appending `:auto-sizing` MUST retain
+the original actor turn for parking, fair reconsideration and completion claim
+validation. Only the Routing purpose may remove one exact final suffix; suffix
+text on Execution, a malformed derivation or foreign/missing claim identity MUST
+NOT confer authority over the base turn. The frozen wire subject remains intact.
+Execution turn matching MUST remain literal. This projection MUST NOT reject an
+otherwise exact actor turn merely because its identifier contains suffix-shaped
+text; Routing removes only its single final derivation, not repeated substrings.
 An installed request-owned receipt source MUST allocate a distinct original
 descriptor for each concrete exchange, including adapter-internal retries. The
 plan and journal MUST retain the exact selected factory before authorization;

@@ -651,6 +651,20 @@ pub(in crate::runtime::tests::agent::token_budget) async fn held() -> (
     RuntimeBudgetAttemptWork,
     RuntimeBudgetHeldAttempt,
 ) {
+    held_subject(BudgetAttemptPurpose::Execution, Some(("", false, Some(7)))).await
+}
+
+/// A distinct actual native Held allocation for each immutable wire subject.
+/// The tuple controls only wire suffix, foreign agent and captured generation.
+async fn held_subject(
+    purpose: BudgetAttemptPurpose,
+    subject: Option<(&str, bool, Option<u64>)>,
+) -> (
+    Scene,
+    crate::runtime::RuntimeAgentProviderDispatch,
+    RuntimeBudgetAttemptWork,
+    RuntimeBudgetHeldAttempt,
+) {
     let mut scene = Scene::new();
     scene
         .service
@@ -666,53 +680,60 @@ pub(in crate::runtime::tests::agent::token_budget) async fn held() -> (
         .budget_owner
         .as_ref()
         .unwrap()
-        .prepare_attempt(
-            ModelTokenUsageKey::new("openai", "gpt-test"),
-            BudgetAttemptPurpose::Execution,
-        )
+        .prepare_attempt(ModelTokenUsageKey::new("openai", "gpt-test"), purpose)
         .unwrap();
     // Bind exactly the same content-free subject the real observer plans before
     // awaiting admission. Conversation membership alone cannot identify a claim.
-    work.plan_wire_receipt_subject(
-        &crate::integrations::agent::provider::ProviderWireRequestObservation {
-            request_id: "original-budget-wait".into(),
-            claim_generation: Some(7),
-            attempt_index: 1,
-            retry_reason: None,
-            conversation_id: dispatch.turn.conversation_id.clone(),
-            turn_id: dispatch.turn.turn_id.clone(),
-            agent_id: dispatch.turn.agent_id.clone(),
-            pane_id: dispatch.turn.pane_id.clone(),
-            provider: "openai".into(),
-            cache_namespace: "fixture".into(),
-            model: "gpt-test".into(),
-            prompt_cache_lineage_id: None,
-            interaction_kind: "execution".into(),
-            allowed_actions: String::new(),
-            schema_digest: String::new(),
-            max_output_tokens: None,
-            output_limit_retry_override_tokens: None,
-            continuity_warning: None,
-            purpose: crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
-            message_count: 0,
-            message_bytes: 0,
-            mcp_directory_bytes: 0,
-            mcp_search_result_bytes: 0,
-            mcp_retrieved_contract_bytes: 0,
-            mcp_action_result_bytes: 0,
-            action_result_bytes: 0,
-            final_wire_diagnostics: None,
-            response_diagnostics: None,
-            openai_diagnostics: None,
-            diagnostics_failed: false,
-            usage: None,
-            usage_presence: None,
-            succeeded: false,
-            failure_kind: None,
-            elapsed_ms: None,
-        },
-    )
-    .unwrap();
+    if let Some((suffix, foreign_agent, generation)) = subject {
+        work.plan_wire_receipt_subject(
+            &crate::integrations::agent::provider::ProviderWireRequestObservation {
+                request_id: "original-budget-wait".into(),
+                claim_generation: generation,
+                attempt_index: 1,
+                retry_reason: None,
+                conversation_id: dispatch.turn.conversation_id.clone(),
+                turn_id: format!("{}{suffix}", dispatch.turn.turn_id),
+                agent_id: if foreign_agent {
+                    "foreign-agent".into()
+                } else {
+                    dispatch.turn.agent_id.clone()
+                },
+                pane_id: dispatch.turn.pane_id.clone(),
+                provider: "openai".into(),
+                cache_namespace: "fixture".into(),
+                model: "gpt-test".into(),
+                prompt_cache_lineage_id: None,
+                interaction_kind: "execution".into(),
+                allowed_actions: String::new(),
+                schema_digest: String::new(),
+                max_output_tokens: None,
+                output_limit_retry_override_tokens: None,
+                continuity_warning: None,
+                purpose: if purpose == BudgetAttemptPurpose::Routing {
+                    crate::integrations::agent::provider::ProviderRequestPurpose::Routing
+                } else {
+                    crate::integrations::agent::provider::ProviderRequestPurpose::Execution
+                },
+                message_count: 0,
+                message_bytes: 0,
+                mcp_directory_bytes: 0,
+                mcp_search_result_bytes: 0,
+                mcp_retrieved_contract_bytes: 0,
+                mcp_action_result_bytes: 0,
+                action_result_bytes: 0,
+                final_wire_diagnostics: None,
+                response_diagnostics: None,
+                openai_diagnostics: None,
+                diagnostics_failed: false,
+                usage: None,
+                usage_presence: None,
+                succeeded: false,
+                failure_kind: None,
+                elapsed_ms: None,
+            },
+        )
+        .unwrap();
+    }
     let admission = work.admission_owner();
     assert!(admission.capture_held().await.is_err());
     assert!(matches!(
@@ -721,6 +742,84 @@ pub(in crate::runtime::tests::agent::token_budget) async fn held() -> (
     ));
     let capture = admission.capture_held().await.unwrap();
     (scene, dispatch, work, capture)
+}
+
+/// Routing alone derives one exact wire suffix. Neither a suffix-shaped
+/// execution turn nor absent/foreign claim evidence may park the base claim.
+#[tokio::test]
+async fn runtime_budget_provider_wait_router_subject_is_purpose_and_claim_qualified() {
+    for (purpose, subject, expected) in [
+        (
+            BudgetAttemptPurpose::Execution,
+            Some(("", false, Some(7))),
+            true,
+        ),
+        (
+            BudgetAttemptPurpose::Routing,
+            Some((":auto-sizing", false, Some(7))),
+            true,
+        ),
+        (
+            BudgetAttemptPurpose::Routing,
+            Some(("", false, Some(7))),
+            false,
+        ),
+        (
+            BudgetAttemptPurpose::Execution,
+            Some((":auto-sizing", false, Some(7))),
+            false,
+        ),
+        (
+            BudgetAttemptPurpose::Routing,
+            Some((":auto-sizing:extra", false, Some(7))),
+            false,
+        ),
+        (
+            BudgetAttemptPurpose::Routing,
+            Some((":auto-sizing:auto-sizing", false, Some(7))),
+            false,
+        ),
+        (
+            BudgetAttemptPurpose::Routing,
+            Some((":auto-sizing", true, Some(7))),
+            false,
+        ),
+        (
+            BudgetAttemptPurpose::Routing,
+            Some((":auto-sizing", false, Some(8))),
+            false,
+        ),
+        (
+            BudgetAttemptPurpose::Routing,
+            Some((":auto-sizing", false, None)),
+            false,
+        ),
+        (BudgetAttemptPurpose::Routing, None, false),
+    ] {
+        let (mut scene, dispatch, work, capture) = held_subject(purpose, subject).await;
+        let turn = &dispatch.turn;
+        let expected_subject = work
+            .ordinary_subject()
+            .map(|(agent, wire_turn, generation)| {
+                agent == turn.agent_id && wire_turn == turn.turn_id && generation == 7
+            });
+        let result = scene.service.park_budget_provider_claim(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            7,
+            capture.clone(),
+            crate::runtime::current_unix_millis(),
+        );
+        let accepted = result.is_ok_and(|transition| transition.applied);
+        drop((capture, work, dispatch));
+        drop(scene);
+        assert_eq!(
+            expected_subject == Some(true),
+            expected,
+            "{purpose:?} {subject:?}"
+        );
+        assert_eq!(accepted, expected, "{purpose:?} {subject:?}");
+    }
 }
 
 #[tokio::test]

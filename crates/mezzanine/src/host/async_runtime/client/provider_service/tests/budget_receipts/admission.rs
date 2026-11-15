@@ -133,7 +133,13 @@ impl AsyncProviderHttpTransport for GateTransport {
     }
 }
 
-async fn boundary(responses: bool, stream: bool, held: bool, request_scoped: bool) {
+async fn boundary(
+    responses: bool,
+    stream: bool,
+    held: bool,
+    request_scoped: bool,
+    identity: Option<(BudgetAttemptPurpose, &str, Option<u64>)>,
+) {
     let limits = BudgetLimits {
         input: if held {
             TokenLimit::limited(0).unwrap()
@@ -196,13 +202,21 @@ async fn boundary(responses: bool, stream: bool, held: bool, request_scoped: boo
     )
     .unwrap();
     request.provider = provider.provider_id().into();
+    let (attempt_purpose, suffix, generation) =
+        identity.unwrap_or((BudgetAttemptPurpose::Execution, "", Some(7)));
+    request.turn_id.push_str(suffix);
+    let wire_purpose = match attempt_purpose {
+        BudgetAttemptPurpose::Routing => ProviderRequestPurpose::Routing,
+        BudgetAttemptPurpose::Execution => ProviderRequestPurpose::Execution,
+        _ => unreachable!("identity fixture only covers ordinary provider purposes"),
+    };
     let work = dispatch
         .budget_owner
         .as_ref()
         .unwrap()
         .prepare_attempt(
             mez_agent::ModelTokenUsageKey::new(&request.provider, &request.model),
-            BudgetAttemptPurpose::Execution,
+            attempt_purpose,
         )
         .unwrap();
     let factory = Arc::new(BudgetAttemptAdmission::new(work.clone()));
@@ -214,21 +228,24 @@ async fn boundary(responses: bool, stream: bool, held: bool, request_scoped: boo
         first: Default::default(),
     });
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-    let observer = ProviderWireRequestObserver::new(&member.conversation, "%1", sender)
-        .with_claim_generation(7)
-        .with_pending_observations(pending.clone());
+    let observer = ProviderWireRequestObserver::new(&member.conversation, "%1", sender);
+    let observer = match generation {
+        Some(generation) => observer.with_claim_generation(generation),
+        None => observer,
+    }
+    .with_pending_observations(pending.clone());
     let observer = if request_scoped {
         observer.with_budget_receipt_source(captured.clone())
     } else {
         observer.with_budget_receipts(factory.clone())
     }
     .unwrap();
-    let chat_observed = chat.as_ref().map(|provider| {
-        ObservedAsyncModelProvider::new(provider, &observer, ProviderRequestPurpose::Execution)
-    });
-    let responses_observed = responses_provider.as_ref().map(|provider| {
-        ObservedAsyncModelProvider::new(provider, &observer, ProviderRequestPurpose::Execution)
-    });
+    let chat_observed = chat
+        .as_ref()
+        .map(|provider| ObservedAsyncModelProvider::new(provider, &observer, wire_purpose));
+    let responses_observed = responses_provider
+        .as_ref()
+        .map(|provider| ObservedAsyncModelProvider::new(provider, &observer, wire_purpose));
     let observed: &dyn AsyncModelProvider = if let Some(provider) = &chat_observed {
         provider
     } else {
@@ -286,7 +303,8 @@ async fn boundary(responses: bool, stream: bool, held: bool, request_scoped: boo
             submit_pending_provider_observation(&handle, &pending, observation.clone())
                 .await
                 .unwrap();
-            assert!(call.await.unwrap().action_batch.is_some());
+            let response = call.await.unwrap();
+            assert!(response.action_batch.is_some());
             assert_eq!(
                 store.budget_account(&member.root).unwrap().known,
                 UsageTotals {
@@ -309,6 +327,106 @@ async fn boundary(responses: bool, stream: bool, held: bool, request_scoped: boo
                 .capture_settled_response(Arc::downgrade(&producer))
                 .await
                 .unwrap();
+            if identity.is_some() {
+                let snapshot = settled.observe_settlement().await.unwrap().unwrap();
+                // Callback data is synthetic here; its expense/capture comes
+                // from the actual issued adapter exchange above. Real router
+                // selection and parent handoff are covered in routing.rs.
+                let selection = mez_agent::AutoSizingRoutingSelection {
+                    selected_profile: dispatch.model_profile.clone(),
+                    selected_profile_name: "default".into(),
+                    routing_token_usage_by_model: std::collections::BTreeMap::from([(
+                        mez_agent::ModelTokenUsageKey::new(
+                            &observation.provider,
+                            &observation.model,
+                        ),
+                        observation.usage.unwrap(),
+                    )]),
+                    decision_summary: None,
+                    fallback: None,
+                };
+                let execution = mez_agent::AgentTurnExecution {
+                    request: request.clone(),
+                    latest_response_usage: response.usage,
+                    response,
+                    routing_token_usage_by_model: Default::default(),
+                    action_results: Vec::new(),
+                    final_turn: true,
+                    terminal_state: mez_agent::AgentTurnState::Completed,
+                };
+                let delivery = capture
+                    .clone()
+                    .into_provider_settlement(producer.clone(), snapshot.clone(), snapshot)
+                    .unwrap();
+                let routing = attempt_purpose == BudgetAttemptPurpose::Routing;
+                let delivery = if routing {
+                    delivery.bind_routing(&selection).unwrap()
+                } else {
+                    delivery.bind_execution(&execution).unwrap()
+                };
+                // This uses the genuine issued-terminal capture and original
+                // current actor claim, not a constructed inference Held epoch.
+                for (agent, event_generation) in [
+                    (dispatch.turn.agent_id.as_str(), 7),
+                    (dispatch.turn.agent_id.as_str(), 8),
+                    ("foreign-agent", 7),
+                ] {
+                    let wire_matches = agent == dispatch.turn.agent_id
+                        && generation == Some(event_generation)
+                        && if routing {
+                            suffix == ":auto-sizing"
+                        } else {
+                            suffix.is_empty()
+                        };
+                    let expected = wire_matches && event_generation == 7;
+                    let completion = if routing {
+                        crate::runtime::AgentProviderEvent::RoutingSelected {
+                            agent_id: AgentId::opaque(agent.to_owned()).unwrap(),
+                            turn_id: dispatch.turn.turn_id.clone(),
+                            claim_generation: event_generation,
+                            selection: Box::new(selection.clone()),
+                        }
+                    } else {
+                        crate::runtime::AgentProviderEvent::Completed {
+                            agent_id: AgentId::opaque(agent.to_owned()).unwrap(),
+                            turn_id: dispatch.turn.turn_id.clone(),
+                            claim_generation: event_generation,
+                            execution: Box::new(execution.clone()),
+                        }
+                    };
+                    assert_eq!(delivery.matches_result(&completion), wire_matches);
+                    if !expected {
+                        let mut batch = crate::runtime::RuntimeEventBatch::new();
+                        batch.push(crate::runtime::RuntimeEvent::AgentProvider(
+                            crate::runtime::AgentProviderEvent::BudgetSettled {
+                                completion: Box::new(completion),
+                                settlement: delivery.clone(),
+                            },
+                        ));
+                        let applied = handle.submit_runtime_events(batch).await;
+                        if wire_matches {
+                            // Genuine stale expense is still original evidence,
+                            // but cannot adopt content into the current claim.
+                            assert_eq!(applied.unwrap().applied, 0);
+                        } else {
+                            assert!(applied.is_err(), "changed wire identity reached adoption");
+                        }
+                    }
+                    let parked = handle
+                        .park_budget_provider_claim(
+                            AgentId::opaque(agent.to_owned()).unwrap(),
+                            dispatch.turn.turn_id.clone(),
+                            event_generation,
+                            capture.clone(),
+                        )
+                        .await;
+                    if expected {
+                        assert!(parked.unwrap(), "valid original identity did not park");
+                    } else {
+                        assert!(parked.is_err(), "invalid original identity did not refuse");
+                    }
+                }
+            }
             assert!(
                 handle
                     .park_budget_provider_claim(
@@ -414,11 +532,39 @@ async fn boundary(responses: bool, stream: bool, held: bool, request_scoped: boo
             std::panic::AssertUnwindSafe(client).catch_unwind(),
         )
         .await;
-        handle.shutdown().await.unwrap();
-        result
+        // Dropping the timed-out/panicked adapter does not join its retained
+        // native authorization or receipt writer. Reconcile the exact journal
+        // before shutdown; failed/planned custody forbids deleting this root.
+        let cleanup = tokio::time::timeout(Duration::from_secs(10), async {
+            for observation in pending.snapshot() {
+                pending.checkpoint(&observation).await?;
+                pending.acknowledge(&observation.request_id);
+            }
+            if !pending.is_empty() {
+                return Err(MezError::invalid_state(
+                    "original admission journal remains unsettled",
+                ));
+            }
+            Ok(())
+        })
+        .await;
+        tokio::time::timeout(Duration::from_secs(5), handle.shutdown())
+            .await
+            .expect("admission actor shutdown timed out; fixture retained")
+            .unwrap();
+        (result, cleanup)
     };
-    let (result, mut exit) = tokio::join!(control, actor.run());
+    let ((result, cleanup), mut exit) = tokio::time::timeout(Duration::from_secs(30), async {
+        // The bounded outer join must not duplicate these large adapter/actor
+        // state machines on the default test thread's poll stack.
+        tokio::join!(Box::pin(control), Box::pin(actor.run()))
+    })
+    .await
+    .expect("admission retirement timed out; fixture retained");
     exit.service.terminate_all_pane_processes().unwrap();
+    cleanup
+        .expect("admission journal retirement timed out; fixture retained")
+        .expect("admission journal retirement failed; fixture retained");
     drop((
         exit,
         observer,
@@ -442,9 +588,49 @@ async fn budget_wire_actual_admission_controls_chat_and_responses_physical_polls
     for (responses, stream) in [(false, false), (true, false), (true, true)] {
         for held in [false, true] {
             for request_scoped in [false, true] {
-                boundary(responses, stream, held, request_scoped).await;
+                boundary(responses, stream, held, request_scoped, None).await;
             }
         }
+    }
+}
+
+/// Qualified issued retirement must project only the exact Routing derivation
+/// for completion, just as the real native Held matrix does before sending.
+#[tokio::test]
+async fn budget_wire_settled_routing_requires_exact_original_claim_derivation() {
+    for suffix in [
+        "",
+        ":auto-sizing",
+        ":auto-sizing:extra",
+        ":auto-sizing:auto-sizing",
+    ] {
+        boundary(
+            false,
+            false,
+            false,
+            true,
+            Some((BudgetAttemptPurpose::Routing, suffix, Some(7))),
+        )
+        .await;
+    }
+    // Execution is literal even when its suffix looks like a router's. Missing
+    // wire generations retain expense, never the current actor's authority.
+    for (purpose, suffix, generation) in [
+        (BudgetAttemptPurpose::Execution, "", Some(7)),
+        (BudgetAttemptPurpose::Execution, ":auto-sizing", Some(7)),
+        (BudgetAttemptPurpose::Execution, "", Some(8)),
+        (BudgetAttemptPurpose::Routing, ":auto-sizing", Some(8)),
+        (BudgetAttemptPurpose::Execution, "", None),
+        (BudgetAttemptPurpose::Routing, ":auto-sizing", None),
+    ] {
+        boundary(
+            false,
+            false,
+            false,
+            true,
+            Some((purpose, suffix, generation)),
+        )
+        .await;
     }
 }
 

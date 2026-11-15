@@ -320,7 +320,6 @@ impl Source {
         handle: &AsyncRuntimeSessionHandle,
         owner: &crate::runtime::RuntimeBudgetAdmissionWork,
         capture: crate::runtime::RuntimeBudgetHeldAttempt,
-        observation: &ProviderWireRequestObservation,
         reason: crate::storage::token_usage::budget::admission::BudgetAdmissionHold,
         previous: Option<&crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState>,
     ) -> Result<(
@@ -333,23 +332,26 @@ impl Source {
         {
             None
         } else {
+            let (agent, turn, generation) = self
+                .work
+                .ordinary_subject()
+                .ok_or_else(|| suspended("original budget claim unavailable"))?;
             Some((
-                AgentId::opaque(observation.agent_id.clone())
+                AgentId::opaque(agent.to_owned())
                     .ok_or_else(|| suspended("original budget agent unavailable"))?,
-                observation
-                    .claim_generation
-                    .ok_or_else(|| suspended("original budget claim unavailable"))?,
+                turn.to_owned(),
+                generation,
             ))
         };
         let auxiliary_waiter = Arc::new(());
         let mut delay = 100u64;
         loop {
             let parked = match &ordinary {
-                Some((agent, generation)) => {
+                Some((agent, turn, generation)) => {
                     handle
                         .park_budget_provider_claim(
                             agent.clone(),
-                            observation.turn_id.clone(),
+                            turn.clone(),
                             *generation,
                             capture.clone(),
                         )
@@ -410,11 +412,11 @@ impl Source {
                         .await?
                 {
                     let ready = match &ordinary {
-                        Some((agent, generation)) => {
+                        Some((agent, turn, generation)) => {
                             handle
                                 .reacquire_budget_provider_claim(
                                     agent.clone(),
-                                    observation.turn_id.clone(),
+                                    turn.clone(),
                                     *generation,
                                     capture.clone(),
                                 )
@@ -567,14 +569,7 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                     .map_err(|_| suspended("original budget hold custody unavailable"))?;
                 let (state, reconsideration_window) = self
                     .0
-                    .wait_for_reacquisition(
-                        handle,
-                        &owner,
-                        capture,
-                        observation,
-                        *reason,
-                        previous.as_ref(),
-                    )
+                    .wait_for_reacquisition(handle, &owner, capture, *reason, previous.as_ref())
                     .await
                     .map_err(|_| suspended("original budget wait unavailable"))?;
                 previous = Some(state);

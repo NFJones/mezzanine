@@ -326,6 +326,13 @@ lifetime, exact current claim/native membership, fair scheduler reacquisition an
 original timer adoption remain required. A sufficient raise is reobserved after
 adoption without another inference, repair or fallback. Human Pause and Stop stay
 independent; read failures retain the result with paced, bounded diagnostics.
+Routing's code-owned `:auto-sizing` wire suffix maps back to its original actor
+turn for pre-send parking, fair reconsideration and settled-result delivery.
+Routing removes exactly one final suffix when comparing the frozen wire turn
+with that captured actor turn; Execution compares its turn literally. An
+underived or differently derived wire turn, foreign agent, or missing/wrong
+generation cannot borrow the base claim. This is claim projection, not a ban on
+literal actor turn IDs containing suffix-shaped text.
 This checkpoint is not the atomic root-wide effect fence: policy can change after
 observation, and actual effect admission and production activation remain pending.
 

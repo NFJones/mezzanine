@@ -223,16 +223,26 @@ impl RuntimeBudgetAttemptWork {
         &self.0.owner.member.root
     }
 
-    pub(super) fn ordinary_subject(&self) -> Option<(&str, &str, u64)> {
+    /// Original actor identity, not the router's derived physical wire turn.
+    /// Only the code-owned Routing purpose can strip this exact final suffix.
+    pub(crate) fn ordinary_subject(&self) -> Option<(&str, &str, u64)> {
         if self.0.owner.auxiliary.is_some() {
             return None;
         }
         let subject = self.0.wire_subject.get()?;
         Some((
             &subject.agent_id,
-            &subject.turn_id,
+            self.claim_turn(&subject.turn_id)?,
             subject.claim_generation?,
         ))
+    }
+
+    fn claim_turn<'a>(&self, wire_turn: &'a str) -> Option<&'a str> {
+        if self.0.attempt.purpose == BudgetAttemptPurpose::Routing {
+            wire_turn.strip_suffix(":auto-sizing")
+        } else {
+            Some(wire_turn)
+        }
     }
 
     /// Bind the original subject before authorization. This pure operation
@@ -279,7 +289,7 @@ impl RuntimeBudgetAttemptWork {
     pub(super) fn matches_claim(&self, agent: &str, turn: &str, generation: u64) -> bool {
         self.0.wire_subject.get().is_some_and(|subject| {
             subject.agent_id == agent
-                && subject.turn_id == turn
+                && self.claim_turn(&subject.turn_id) == Some(turn)
                 && subject.claim_generation == Some(generation)
         })
     }
