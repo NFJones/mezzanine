@@ -34,9 +34,29 @@ pub(crate) struct RuntimeBudgetRequestOwner {
     pub(in crate::runtime) auxiliary_fence: Option<std::sync::Weak<std::sync::atomic::AtomicBool>>,
     #[cfg(test)]
     pub(super) title_grant_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
+    #[cfg(test)]
+    pub(super) completion_resume_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
 }
 
 impl RuntimeBudgetRequestOwner {
+    /// Pause only the original producer after the actor has adopted its resume
+    /// timer, before its fresh completion read. This creates no admission proof.
+    #[cfg(test)]
+    pub(crate) fn gate_completion_resume_for_tests(
+        &mut self,
+        gate: Arc<(tokio::sync::Notify, tokio::sync::Notify)>,
+    ) {
+        self.completion_resume_gate = Some(gate);
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn after_completion_resume_for_tests(&self) {
+        if let Some(gate) = &self.completion_resume_gate {
+            gate.0.notify_one();
+            gate.1.notified().await;
+        }
+    }
+
     /// Request-local acceptance seam: gate after actor resume but before fresh
     /// native reconsideration, without retaining an unobserved local permit.
     #[cfg(test)]

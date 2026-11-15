@@ -50,6 +50,18 @@ async fn budget_completed_response_human_pause_is_independent_in_both_release_or
     }
 }
 
+/// A genuine resume/timer adoption cannot authorize publication using the read
+/// from before that adoption. Repark the same response, then execute it once.
+#[tokio::test]
+async fn budget_completed_response_policy_recross_after_timer_adoption_reparks_original() {
+    Box::pin(qualify(CompletionCase::Recross)).await;
+}
+
+#[tokio::test]
+async fn budget_completed_response_stop_after_timer_adoption_cannot_offer_candidate() {
+    Box::pin(qualify(CompletionCase::StopAfterResume)).await;
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CompletionCase {
     Release,
@@ -62,6 +74,8 @@ enum CompletionCase {
     BudgetFirst,
     HumanFirst,
     MonitorError,
+    Recross,
+    StopAfterResume,
 }
 
 #[tokio::test]
@@ -70,7 +84,7 @@ async fn budget_completed_response_native_monitor_error_retires_retained_writer(
 }
 
 async fn qualify(mode: CompletionCase) {
-    let stop = mode == CompletionCase::Stop;
+    let stop = matches!(mode, CompletionCase::Stop | CompletionCase::StopAfterResume);
     let read_failure = mode == CompletionCase::ReadFailure;
     let adopt = matches!(
         mode,
@@ -81,6 +95,7 @@ async fn qualify(mode: CompletionCase) {
             | CompletionCase::BudgetFirst
             | CompletionCase::HumanFirst
             | CompletionCase::MonitorError
+            | CompletionCase::Recross
     );
     let human = matches!(
         mode,
@@ -97,6 +112,20 @@ async fn qualify(mode: CompletionCase) {
         output: TokenLimit::Limited(3),
     })
     .await;
+    let resume_gate = if matches!(
+        mode,
+        CompletionCase::Recross | CompletionCase::StopAfterResume
+    ) {
+        let gate = Arc::new((tokio::sync::Notify::new(), tokio::sync::Notify::new()));
+        dispatch
+            .budget_owner
+            .as_mut()
+            .unwrap()
+            .gate_completion_resume_for_tests(gate.clone());
+        Some(gate)
+    } else {
+        None
+    };
     // Only this private native-effect control bypasses interactive approval;
     // policy/scope admission and actual executor/retirement remain production.
     if adopt {
@@ -236,8 +265,44 @@ async fn qualify(mode: CompletionCase) {
                 db.execute("UPDATE budget_receipts SET body='{}' WHERE id=?1", [&original.0]).unwrap();
                 Some(original)
             } else { None };
-            if stop { handle.execute_agent_shell_command(primary.clone(), "/stop".into()).await.unwrap(); }
+            if mode == CompletionCase::Stop { handle.execute_agent_shell_command(primary.clone(), "/stop".into()).await.unwrap(); }
             super::remember_retirement::publish_policy(&store, "completion-release", 'd', BudgetLimits::default()).await;
+            if let Some(gate) = &resume_gate {
+                tokio::time::timeout(Duration::from_secs(8), gate.0.notified()).await
+                    .map_err(|_| "original completion did not reach adopted resume".to_owned())?;
+                let timers = handle.drain_timer_side_effects(64).await.unwrap();
+                if !timers.iter().any(|effect| matches!(effect,
+                    crate::runtime::RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == crate::runtime::RuntimeTimerKind::ProviderClaim && key.owner_id == turn && key.generation == 7)) {
+                    return Err("resume gate preceded actual original timer adoption".to_owned());
+                }
+                if mode == CompletionCase::StopAfterResume {
+                    handle.execute_agent_shell_command(primary.clone(), "/stop".into()).await.unwrap();
+                    gate.1.notify_one();
+                } else {
+                    super::remember_retirement::publish_policy(&store, "completion-recross", 'e', BudgetLimits {
+                        input: TokenLimit::Limited(11), output: TokenLimit::Limited(3),
+                    }).await;
+                    gate.1.notify_one();
+                    tokio::time::timeout(Duration::from_secs(8), async {
+                        loop {
+                            if worker.is_finished() { return Err("recross escaped instead of reparking original".to_owned()); }
+                            let parked = handle.drain_timer_side_effects(64).await.unwrap().iter().any(|effect| matches!(effect,
+                                crate::runtime::RuntimeSideEffect::CancelTimer { key }
+                                if key.kind == crate::runtime::RuntimeTimerKind::ProviderClaim && key.owner_id == turn && key.generation == 7));
+                            if parked { return Ok(()); }
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    }).await.map_err(|_| "recross did not park original after adopted timer".to_owned())??;
+                    if !handle.agent_turn_is_running(&turn).await.unwrap() || counter.exists() {
+                        return Err("recross lost original claim or executed candidate".to_owned());
+                    }
+                    super::remember_retirement::publish_policy(&store, "completion-second-release", 'f', BudgetLimits::default()).await;
+                    tokio::time::timeout(Duration::from_secs(8), gate.0.notified()).await
+                        .map_err(|_| "reparked original did not reacquire".to_owned())?;
+                    gate.1.notify_one();
+                }
+            }
             if mode == CompletionCase::BudgetFirst {
                 let early = tokio::time::timeout(Duration::from_millis(2300), &mut worker).await;
                 joined |= early.is_ok();
@@ -265,6 +330,22 @@ async fn qualify(mode: CompletionCase) {
             joined = true;
             let event = event
                 .map_err(|error| error.to_string())?.map_err(|error| error.to_string())?;
+            if mode == CompletionCase::StopAfterResume {
+                // Either the monitor notices Stop, or its authentic completed
+                // envelope loses current adoption. Neither can offer an effect.
+                if let Some((event, _)) = event {
+                    let mut batch = RuntimeEventBatch::new();
+                    batch.push(event);
+                    if handle.submit_runtime_events(batch).await.map_err(|error| error.to_string())?.applied != 0 {
+                        return Err("stopped resumed completion adopted".to_owned());
+                    }
+                }
+                if handle.drain_runtime_side_effects(256).await.unwrap().iter().any(|effect| matches!(effect,
+                    crate::runtime::RuntimeSideEffect::DispatchNativeShellAction { turn_id, .. } if turn_id == &turn)) {
+                    return Err("Stop after timer adoption offered native candidate".to_owned());
+                }
+                return Ok(false);
+            }
             let published = match &event {
                 Some((RuntimeEvent::AgentProvider(AgentProviderEvent::BudgetSettled { completion, settlement }), _)) => {
                     use crate::storage::token_usage::budget::receipts::BudgetSettlementState;

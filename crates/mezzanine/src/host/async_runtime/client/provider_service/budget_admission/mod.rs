@@ -178,6 +178,8 @@ impl BudgetRequestAdmission {
                 }
             }
             drop(inactive);
+            #[cfg(test)]
+            self.owner.after_completion_resume_for_tests().await;
             // Actor selection is not a policy grant. Reobserve after adoption;
             // another crossing parks this same result, never a new inference.
         }

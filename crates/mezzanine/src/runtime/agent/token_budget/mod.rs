@@ -939,6 +939,8 @@ impl RuntimeSessionService {
             auxiliary_fence: None,
             #[cfg(test)]
             title_grant_gate: None,
+            #[cfg(test)]
+            completion_resume_gate: None,
         };
         owner.validate_request(&turn.conversation_id)?;
         Ok(Some(owner))
