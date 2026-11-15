@@ -10,6 +10,15 @@
 //! auxiliary requeue and membership activation remain staged.
 //! Qualified scoped retirement commits a separate terminal receipt after subtotals,
 //! with unknown dimensions unless independent dialect evidence qualifies them.
+//!
+//! A compaction wave has several exchange journals but only one actor claim and
+//! one active clock. Its request-local fair read/write lane permits concurrent
+//! unlimited sends; only a positively refused node upgrades to exclusive park
+//! custody, after issued siblings transfer durable terminal receipts. Competing
+//! nodes cannot install different wait captures on that same claim or park its
+//! clock twice. The journal owns the guard across cancellation, not the send
+//! future. Native root admission remains the sole authority to spend; this lane
+//! neither grants permits nor coordinates unrelated requests or roots.
 
 use super::*;
 use crate::integrations::agent::provider::{
@@ -30,6 +39,10 @@ pub(super) struct BudgetRequestAdmission {
     waiter: Option<AsyncRuntimeSessionHandle>,
     deadline: Option<crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline>,
     completion: Arc<Mutex<RequestCompletion>>,
+    // Shared only by this original compaction dispatch's bounded node wave.
+    // Readers preserve unlimited concurrency; a held node takes exclusive
+    // custody only after all earlier issued siblings have durably retired.
+    compaction_lane: Arc<tokio::sync::RwLock<()>>,
 }
 
 /// At most one original terminal descriptor, not another observation ledger.
@@ -65,6 +78,7 @@ impl BudgetRequestAdmission {
             waiter: None,
             deadline: None,
             completion: Default::default(),
+            compaction_lane: Default::default(),
         }
     }
 
@@ -254,6 +268,8 @@ impl ProviderObservationReceiptSource for BudgetRequestAdmission {
                 owner: self.completion.clone(),
                 sequence,
             }),
+            (observation.purpose == ProviderRequestPurpose::Compaction)
+                .then(|| self.compaction_lane.clone()),
         )))
     }
 }
@@ -282,6 +298,11 @@ struct Phase {
     issued: Option<RuntimeBudgetIssuedAttempt>,
     // Original never-consumed permit withdrawn after its actual writer joins.
     unused: Option<RuntimeBudgetUnusedAttempt>,
+    // The journal retains these guards even if before_send is cancelled while
+    // its original native authorization writer is still running. Only joined
+    // absence or a durable terminal receipt can release them.
+    compaction_reader: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
+    compaction_writer: Option<tokio::sync::OwnedRwLockWriteGuard<()>>,
 }
 
 struct Source {
@@ -290,6 +311,7 @@ struct Source {
     waiter: Option<AsyncRuntimeSessionHandle>,
     deadline: Option<crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline>,
     completion: Option<CompletionSlot>,
+    compaction_lane: Option<Arc<tokio::sync::RwLock<()>>>,
 }
 
 fn reconsider_changed_hold(
@@ -445,7 +467,7 @@ pub(super) struct BudgetAttemptAdmission(Arc<Source>);
 impl BudgetAttemptAdmission {
     #[cfg(test)]
     pub(super) fn new(work: RuntimeBudgetAttemptWork) -> Self {
-        Self::retaining(work, None, None, None)
+        Self::retaining(work, None, None, None, None)
     }
 
     fn retaining(
@@ -455,6 +477,7 @@ impl BudgetAttemptAdmission {
             crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline,
         >,
         completion: Option<CompletionSlot>,
+        compaction_lane: Option<Arc<tokio::sync::RwLock<()>>>,
     ) -> Self {
         Self(Arc::new(Source {
             work,
@@ -462,6 +485,7 @@ impl BudgetAttemptAdmission {
             waiter,
             deadline,
             completion,
+            compaction_lane,
         }))
     }
 
@@ -551,6 +575,20 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                 }
                 phase.started = true;
             }
+            if let Some(lane) = &self.0.compaction_lane {
+                let reader = lane.clone().read_owned().await;
+                let mut phase = self
+                    .0
+                    .phase
+                    .lock()
+                    .map_err(|_| suspended("budget attempt custody unavailable"))?;
+                if phase.finalized.is_some() {
+                    return Err(suspended(
+                        "compaction attempt finalized before authorization",
+                    ));
+                }
+                phase.compaction_reader = Some(reader);
+            }
             let owner = self.0.work.admission_owner();
             let mut admission = owner
                 .claim()
@@ -562,6 +600,29 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                 let Some(handle) = &self.0.waiter else { break };
                 if *reason == BudgetAdmissionHold::RegistrationOnly {
                     break;
+                }
+                if let Some(lane) = &self.0.compaction_lane {
+                    let needs_writer = {
+                        let mut phase = self
+                            .0
+                            .phase
+                            .lock()
+                            .map_err(|_| suspended("budget attempt custody unavailable"))?;
+                        // claim/retry has joined and positively refused this
+                        // unissued request. Never upgrade while its writer may
+                        // still authorize a send. Queued siblings hold no read
+                        // guard, so Tokio's fair lock cannot deadlock the wave.
+                        phase.compaction_reader.take();
+                        phase.compaction_writer.is_none()
+                    };
+                    if needs_writer {
+                        let writer = lane.clone().write_owned().await;
+                        self.0
+                            .phase
+                            .lock()
+                            .map_err(|_| suspended("budget attempt custody unavailable"))?
+                            .compaction_writer = Some(writer);
+                    }
                 }
                 let capture = owner
                     .capture_held()
@@ -717,6 +778,14 @@ impl ProviderObservationReceipt for Receipt {
     fn checkpoint(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             let Some(work) = self.work().await? else {
+                // Original authorization has joined with positive absence.
+                let mut phase = self
+                    .source
+                    .phase
+                    .lock()
+                    .map_err(|_| suspended("budget attempt custody unavailable"))?;
+                phase.compaction_reader.take();
+                phase.compaction_writer.take();
                 return Ok(());
             };
             checkpoint_work(work).await?;
@@ -762,6 +831,16 @@ impl ProviderObservationReceipt for Receipt {
                 {
                     completion.publish(work)?;
                 }
+                // All original native writers and transport custody are now
+                // observed and the terminal receipt is durable. Prefix-only or
+                // failed checkpoints must not let another node park the lease.
+                let mut phase = self
+                    .source
+                    .phase
+                    .lock()
+                    .map_err(|_| suspended("budget attempt custody unavailable"))?;
+                phase.compaction_reader.take();
+                phase.compaction_writer.take();
             }
             Ok(())
         })

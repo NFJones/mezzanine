@@ -1281,6 +1281,18 @@ after Stop, rebind or store replacement. Their positive ACKs acknowledge only
 bookkeeping, not permission to issue or repeat a provider request. Concrete
 per-attempt admission and automatic receipt-driver wiring remain downstream.
 
+For already activated test memberships, monitored compaction waves now coordinate
+their concurrent nodes around the original single claim and active clock. An
+issued sibling transfers its terminal native receipt before a held node parks
+that claim; other held nodes wait without replacing the exact parked capture.
+Unlimited nodes can still issue concurrently. The original journal retains wave
+custody across cancellation, and a received usage prefix alone cannot release it.
+Equality can hold a real recursive wave; a sufficient policy raise resumes that
+same claim through fresh native admission, while Stop remains authoritative.
+This internal connection does not release `/session-budget`, activate production
+membership, establish cross-root fairness, or authorize executable effects from
+an exhausted response.
+
 Actor capture memory has a separate 4,096-entry bound. At capacity, completed
 detached captures can be reclaimed without touching durable membership or usage.
 Live pane/loop sources, unresolved proposals and outstanding preparation/rollback

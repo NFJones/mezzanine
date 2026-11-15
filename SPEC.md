@@ -16855,6 +16855,17 @@ not discard the watchdog or replay its consumed callback. Capacity progress
 MUST retry that obligation; actual timer offer MUST deduct queued active time.
 Publication supervision remains separate. This does not establish fair
 auxiliary capacity release/requeue or activate budget membership.
+Concurrent nodes in one monitored compaction wave MUST share custody of its
+single claim and active clock. A positively nonwriting node MUST NOT park that
+claim while an issued sibling still owns unsettled transport or native receipt
+work. Competing held nodes MUST NOT replace one another's wait capture or open
+overlapping inactive spans. Request-local coordination MUST preserve unlimited
+inference concurrency and retain its guards through the original journal on
+cancellation. Only joined positive absence or durable terminal settlement may
+release that custody; a usage prefix alone is insufficient. Native root
+authorization remains mandatory for every physical exchange, including after
+policy release. This staged wave coordination is not root-wide effect gating
+or budget activation.
 Remember observers MUST use the task's captured conversation identity, never its
 runtime-scoped prompt-cache namespace or a current pane fallback. A claimed
 remember dispatch MUST borrow a weak send fence owned by its actual actor claim.

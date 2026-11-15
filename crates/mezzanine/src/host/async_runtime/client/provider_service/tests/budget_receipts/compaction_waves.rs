@@ -1,6 +1,6 @@
 //! Recursive model waves use real HTTP, native expense ACKs, actor adoption and
-//! the ordered publication worker. Unlimited is an explicit concurrency control,
-//! not qualification of multiple held nodes sharing one finite-root lease.
+//! the ordered publication worker. Finite siblings retain one original lease
+//! across equality, policy release and Stop; unlimited remains a control.
 
 use super::*;
 use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
@@ -30,22 +30,54 @@ fn layer(input: u64) -> ConfigLayer {
 
 #[tokio::test]
 async fn budget_recursive_compaction_waves_adopt_one_durable_head() {
-    Box::pin(qualify(false)).await;
+    Box::pin(qualify(false, BudgetLimits::default(), None)).await;
 }
 
 #[tokio::test]
 async fn budget_recursive_compaction_stop_between_waves_preserves_original_expense() {
-    Box::pin(qualify(true)).await;
+    Box::pin(qualify(true, BudgetLimits::default(), None)).await;
 }
 
-async fn qualify(stop_between: bool) {
+/// A generous finite threshold must serialize real sibling requests without
+/// discarding a nonwriting sibling or renewing the original compaction lease.
+#[tokio::test]
+async fn budget_recursive_compaction_finite_root_adopts_original_head() {
+    Box::pin(qualify(
+        false,
+        BudgetLimits {
+            input: mez_agent::token_budget::TokenLimit::Limited(1_000_000),
+            output: mez_agent::token_budget::TokenLimit::Limited(1_000_000),
+        },
+        None,
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn budget_recursive_compaction_equality_release_retains_original_wave() {
+    Box::pin(qualify(false, crossing_limits(), Some(false))).await;
+}
+
+#[tokio::test]
+async fn budget_recursive_compaction_equality_stop_cannot_revive_wave() {
+    Box::pin(qualify(false, crossing_limits(), Some(true))).await;
+}
+
+fn crossing_limits() -> BudgetLimits {
+    BudgetLimits {
+        input: mez_agent::token_budget::TokenLimit::Limited(11),
+        output: mez_agent::token_budget::TokenLimit::Unlimited,
+    }
+}
+
+async fn qualify(stop_between: bool, limits: BudgetLimits, stop_held: Option<bool>) {
     let Prepared {
         mut service,
         dispatch,
         store,
+        member: original_member,
         mut root,
-        ..
-    } = prepared_case(BudgetLimits::default()).await;
+    } = prepared_case(limits).await;
     let primary = service
         .session()
         .clients()
@@ -99,6 +131,8 @@ async fn qualify(stop_between: bool) {
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = calls.clone();
+    let checked_store = store.clone();
+    let checked_root = original_member.root.clone();
     let mut server = tokio::spawn(async move {
         loop {
             let (mut socket, _) = listener.accept().await?;
@@ -131,8 +165,38 @@ async fn qualify(stop_between: bool) {
                     }
                 }
             }
-            if observed.fetch_add(1, Ordering::SeqCst) >= 128 {
+            let prior = observed.fetch_add(1, Ordering::SeqCst);
+            if prior >= 128 {
                 return Err(MezError::invalid_state("recursive request bound"));
+            }
+            if limits.requires_serial_inference() {
+                // Inspect at the physical boundary, before replying. A serial
+                // listener alone cannot prove admission or receipt ordering.
+                let store = checked_store.clone();
+                let root = checked_root.clone();
+                tokio::task::spawn_blocking(move || {
+                    assert_eq!(
+                        store.budget_account(&root).unwrap().known,
+                        UsageTotals {
+                            input: prior as u64 * 11,
+                            output: prior as u64 * 3
+                        }
+                    );
+                    let outstanding: i64 = rusqlite::Connection::open(store.path())
+                        .unwrap()
+                        .query_row(
+                            "SELECT COUNT(*) FROM budget_admissions WHERE retired_receipt IS NULL",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        outstanding, 1,
+                        "finite wave issued overlapping native grants"
+                    );
+                })
+                .await
+                .map_err(|_| MezError::invalid_state("physical receipt ordering failed"))?;
             }
             let body = serde_json::json!({"model":"test-model","choices":[{
                 "index":0,"finish_reason":"stop","message":{"role":"assistant","content":"one final manual head"}
@@ -206,6 +270,75 @@ async fn qualify(stop_between: bool) {
                     ),
                 );
                 assert!(admitted.is_some(), "original monitor admission refused");
+                if waves == 0
+                    && let Some(stop) = stop_held
+                {
+                    tokio::time::timeout(Duration::from_secs(10), async {
+                        loop {
+                            if handle
+                                .budget_compaction_claim_is_quiescent("%1".into(), generation)
+                                .await?
+                            {
+                                return Ok::<_, MezError>(());
+                            }
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    })
+                    .await
+                    .map_err(|_| MezError::invalid_state("original finite wave did not park"))??;
+                    assert_eq!(calls.load(Ordering::SeqCst), 1);
+                    assert_eq!(
+                        store.budget_account(&member.root)?.known,
+                        UsageTotals {
+                            input: 11,
+                            output: 3
+                        }
+                    );
+                    assert_eq!(
+                        workers.len(),
+                        1,
+                        "the original monitored wave must remain owned"
+                    );
+                    assert!(
+                        handle
+                            .claim_agent_compaction_task("%1".into(), generation)
+                            .await?
+                            .is_none()
+                    );
+                    if stop {
+                        handle
+                            .execute_agent_shell_command(primary.clone(), "/stop".into())
+                            .await?;
+                    }
+                    let writer = store.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let projection = writer.budget_policy_projection()?;
+                        let prior = projection.committed.unwrap();
+                        let operation = BudgetPolicyPublication {
+                            namespace: projection.namespace,
+                            id: BudgetReceiptId::new("recursive-finite-release").unwrap(),
+                            expected_revision: projection.revision,
+                            previous_digest: prior.digest,
+                            proposed: BudgetConfigPolicy {
+                                source: prior.source,
+                                digest: "e".repeat(64),
+                                limits: BudgetLimits {
+                                    input: mez_agent::token_budget::TokenLimit::Limited(1_000_000),
+                                    output: mez_agent::token_budget::TokenLimit::Limited(1_000_000),
+                                },
+                            },
+                            supersedes: None,
+                        };
+                        writer.begin_budget_policy_publication(&operation)?;
+                        writer.reconcile_budget_policy_publication(
+                            &operation,
+                            &operation.proposed.digest,
+                        )?;
+                        Ok::<_, MezError>(())
+                    })
+                    .await
+                    .map_err(|_| MezError::invalid_state("finite release writer failed"))??;
+                }
                 let joined =
                     tokio::time::timeout(Duration::from_secs(30), workers.join_next_with_id())
                         .await
@@ -213,16 +346,51 @@ async fn qualify(stop_between: bool) {
                             MezError::invalid_state("recursive wave observation deadline")
                         })?
                         .ok_or_else(|| MezError::invalid_state("missing original monitor"))?;
-                assert!(matches!(
-                    &joined,
-                    Ok((
-                        _,
-                        Ok(Some((
-                            RuntimeEvent::AgentCompaction(AgentCompactionEvent::Completed { .. }),
-                            _
-                        )))
-                    ))
-                ));
+                assert!(
+                    if stop_held == Some(true) {
+                        matches!(&joined, Ok((_, Ok(None))))
+                            || matches!(
+                                &joined,
+                                Ok((
+                                    _,
+                                    Ok(Some((
+                                        RuntimeEvent::AgentCompaction(
+                                            AgentCompactionEvent::Failed { .. }
+                                        ),
+                                        _
+                                    )))
+                                ))
+                            )
+                    } else {
+                        matches!(
+                            &joined,
+                            Ok((
+                                _,
+                                Ok(Some((
+                                    RuntimeEvent::AgentCompaction(
+                                        AgentCompactionEvent::Completed { .. }
+                                    ),
+                                    _
+                                )))
+                            ))
+                        )
+                    },
+                    "original wave failure: {:?}",
+                    match &joined {
+                        Ok((
+                            _,
+                            Ok(Some((
+                                RuntimeEvent::AgentCompaction(AgentCompactionEvent::Failed {
+                                    kind,
+                                    message,
+                                    ..
+                                }),
+                                _,
+                            ))),
+                        )) => Some((kind.as_str(), message.as_str())),
+                        _ => None,
+                    }
+                );
                 record_owned_agent_provider_worker(
                     joined,
                     &handle,
@@ -232,6 +400,28 @@ async fn qualify(stop_between: bool) {
                 )
                 .await?;
                 waves += 1;
+                if stop_held == Some(true) {
+                    let persistence = run_async_persistence_side_effect_service(
+                        &handle,
+                        AsyncRuntimeSideEffectServiceConfig {
+                            max_polls: 16,
+                            drain_limit: 64,
+                            idle_interval: Duration::from_millis(1),
+                        },
+                        |_, _| true,
+                    )
+                    .await?;
+                    assert_eq!(persistence.failed, 0);
+                    assert_eq!(calls.load(Ordering::SeqCst), 1);
+                    assert_eq!(accepted_heads(&handle).await?, 0);
+                    assert!(
+                        handle
+                            .claim_agent_compaction_task("%1".into(), generation)
+                            .await?
+                            .is_none()
+                    );
+                    return Ok::<_, MezError>((waves, member.root, false));
+                }
                 assert_eq!(
                     store.budget_account(&member.root)?.known,
                     UsageTotals {
@@ -399,10 +589,10 @@ async fn qualify(stop_between: bool) {
     let (waves, _, published) = exercise
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
         .unwrap();
-    assert_eq!(published, !stop_between);
+    assert_eq!(published, !stop_between && stop_held != Some(true));
     assert_eq!(claims as usize, count);
     assert!(count > 0);
-    if stop_between {
+    if stop_between || stop_held == Some(true) {
         assert_eq!(waves, 1);
         assert!(restored.is_none());
     } else {
