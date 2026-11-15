@@ -56,7 +56,7 @@ async fn prepare(scene: &mut Scene, turn: &AgentTurnRecord) -> BudgetMembership 
     member
 }
 
-fn ready_child(scene: &mut Scene, pane: &str) {
+pub(super) fn ready_child(scene: &mut Scene, pane: &str) {
     // Shell readiness alone does not discharge the native startup owner. Drive
     // the same authenticated adapter/bootstrap events as the managed host;
     // only the returned environment bytes are fixture data.

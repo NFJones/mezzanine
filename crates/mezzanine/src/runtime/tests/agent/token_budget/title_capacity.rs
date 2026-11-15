@@ -104,7 +104,7 @@ async fn runtime_budget_parked_titles_release_active_capacity() {
     );
 }
 
-async fn parked_title(
+pub(super) async fn parked_title(
     scene: &mut super::Scene,
     conversation: &str,
     waiter: &Arc<()>,

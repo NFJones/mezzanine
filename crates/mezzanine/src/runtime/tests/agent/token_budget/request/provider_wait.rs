@@ -620,7 +620,7 @@ async fn runtime_budget_provider_wait_host_committed_timer_pressure_is_recoverab
     }
 }
 
-async fn held() -> (
+pub(in crate::runtime::tests::agent::token_budget) async fn held() -> (
     Scene,
     crate::runtime::RuntimeAgentProviderDispatch,
     RuntimeBudgetAttemptWork,

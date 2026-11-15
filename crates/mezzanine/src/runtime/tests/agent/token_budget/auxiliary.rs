@@ -276,13 +276,7 @@ async fn qualify_manual_compaction(raw_tail: bool) {
 pub(super) fn setup() -> (Scene, mez_core::ids::ClientId, String) {
     // Every test uses a real original constructor birth and private stores.
     let mut scene = Scene::new();
-    scene.service.set_config_root(scene._root.to_path_buf());
-    scene.service.replace_config_layers(vec![ConfigLayer {
-        name: "budget-auxiliary".into(), path: None, format: ConfigFormat::Toml,
-        scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\nshell_mode=\"pane\"\ndefault_provider=\"openai\"\ndefault_model_profile=\"budget-test\"\nsession_title_policy=\"generated\"\n[permissions]\nsandbox=\"policy-only\"\n[providers.openai]\nkind=\"openai\"\nmodels=[\"gpt-test\"]\n[model_profiles.budget-test]\nprovider=\"openai\"\nmodel=\"gpt-test\"\ncontext_window_tokens=128000\n".into(),
-    }]).unwrap();
-    scene.service.enable_runtime_budget_membership_for_tests();
+    configure(&mut scene);
     let primary = scene
         .service
         .attach_primary("primary", true, Size::new(120, 30).unwrap(), 120)
@@ -295,6 +289,16 @@ pub(super) fn setup() -> (Scene, mez_core::ids::ClientId, String) {
         .session_id
         .clone();
     (scene, primary, conversation)
+}
+
+pub(super) fn configure(scene: &mut Scene) {
+    scene.service.set_config_root(scene._root.to_path_buf());
+    scene.service.replace_config_layers(vec![ConfigLayer {
+        name: "budget-auxiliary".into(), path: None, format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\nshell_mode=\"pane\"\ndefault_provider=\"openai\"\ndefault_model_profile=\"budget-test\"\nsession_title_policy=\"generated\"\n[permissions]\nsandbox=\"policy-only\"\n[providers.openai]\nkind=\"openai\"\nmodels=[\"gpt-test\"]\n[model_profiles.budget-test]\nprovider=\"openai\"\nmodel=\"gpt-test\"\ncontext_window_tokens=128000\n".into(),
+    }]).unwrap();
+    scene.service.enable_runtime_budget_membership_for_tests();
 }
 
 /// Failed optional admission may allocate an attempt locally, but rollback must
