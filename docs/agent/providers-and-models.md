@@ -217,11 +217,23 @@ Human `/stop` also retires the invoking conversation's queued or claimed title,
 including a parked title without a live ordinary turn. Original expense custody
 remains available for late settlement; a later policy release cannot revive it.
 
-Title parking now releases its optional-title execution slot and orders original
-title reacquisition as described above. Cross-family/root-wide inference fairness,
-memory capacity release/fair requeue, root-wide effect gates, and production
-membership activation remain unfinished; compaction's retained-wave lease
-suspension is separate from those remaining contracts.
+When native observation permits a held finite-root request to reconsider, the
+actor orders eligible originals across ordinary, title, memory and compaction
+claims. Ordering retains only weak hold/future metadata, bounded at 4096 entries;
+it cannot keep expense owners or runnable work alive. One weakly observed window
+per root stays with the original future through family reacquisition and the
+native authorization reply, even when that writer revokes the old hold epoch.
+Once native reconsideration starts, its existing retained writer owns a strong
+window token until actual join. Cancelling the caller cannot release that root's
+window while the writer still runs or discard its original unused permit.
+Family refusal rotates the candidate and releases the window; dead, retired or
+paused candidates cannot remain a ready head. Unlimited requests bypass this
+window and independent roots do not share one. Existing family capacity, timers,
+human holds, native admission and final send fences remain authoritative.
+This orders already-held requests within one runtime, not initial requests or
+cross-runtime competitors. Whole-root inference fairness, memory capacity
+release/fair requeue, root-wide effect gates and production membership activation
+remain unfinished; compaction's retained-wave lease suspension is separate.
 
 Native async sends also retain evidence that their exact local transport future
 and active callback futures were destroyed, including on cancellation. This transfer

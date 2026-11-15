@@ -16,7 +16,10 @@ pub(crate) struct RememberWait {
 }
 
 impl RuntimeSessionService {
-    fn budget_remember_subject(&self, capture: &RuntimeBudgetHeldAttempt) -> Result<String> {
+    pub(super) fn budget_remember_subject(
+        &self,
+        capture: &RuntimeBudgetHeldAttempt,
+    ) -> Result<String> {
         let Some(RuntimeBudgetAuxiliaryClaim::Remember { pane, observation }) =
             capture.auxiliary_claim()
         else {

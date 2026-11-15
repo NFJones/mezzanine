@@ -3183,6 +3183,18 @@ impl AsyncRuntimeSessionActor {
                     .budget_compaction_claim_is_quiescent(&pane, generation)));
                 false
             }
+            AsyncRuntimeRequest::SelectBudgetReconsideration {
+                capture,
+                future,
+                window,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.service
+                        .select_budget_reconsideration(&capture, future, window),
+                );
+                false
+            }
             AsyncRuntimeRequest::ResumeBudgetAuxiliaryClaim { capture, reply } => {
                 let result = if capture.compaction_subject().is_some() {
                     if self.available_committed_side_effect_capacity() < 2 {

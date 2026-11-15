@@ -52,6 +52,9 @@ struct State {
     /// Only the retained Held state owns this epoch. Captures borrow it weakly
     /// so reconsideration revokes them before any new native writer can run.
     hold_epoch: Option<Arc<()>>,
+    /// The actual running writer, not its cancellable observer, owns this
+    /// ordering lifetime until join. It carries no source or send authority.
+    reconsideration_window: Option<Arc<()>>,
 }
 
 /// Contains no idle reverse reference to the original AttemptSource. Even a
@@ -76,7 +79,38 @@ pub(crate) struct RuntimeBudgetHeldAttempt {
     epoch: Weak<()>,
 }
 
+#[derive(Debug)]
+pub(super) struct WeakHeldAttempt {
+    work: super::request::WeakAttemptWork,
+    epoch: Weak<()>,
+}
+
+impl WeakHeldAttempt {
+    pub(super) fn upgrade(&self) -> Option<RuntimeBudgetHeldAttempt> {
+        self.epoch.upgrade()?;
+        Some(RuntimeBudgetHeldAttempt {
+            work: self.work.upgrade()?,
+            epoch: self.epoch.clone(),
+        })
+    }
+}
+
 impl RuntimeBudgetHeldAttempt {
+    pub(super) fn downgrade(&self) -> WeakHeldAttempt {
+        WeakHeldAttempt {
+            work: self.work.downgrade(),
+            epoch: self.epoch.clone(),
+        }
+    }
+
+    pub(super) fn root(&self) -> &mez_agent::token_budget::BudgetRootId {
+        self.work.root()
+    }
+
+    pub(super) fn ordinary_subject(&self) -> Option<(&str, &str, u64)> {
+        self.work.ordinary_subject()
+    }
+
     pub(crate) fn compaction_subject(&self) -> Option<(&str, u64)> {
         match self.auxiliary_claim()? {
             super::auxiliary::RuntimeBudgetAuxiliaryClaim::Compaction { pane, generation } => {
@@ -256,6 +290,29 @@ impl RuntimeBudgetAdmissionWork {
     /// Explicitly reconsider ONLY an observed native hold, which wrote nothing.
     /// No internal timer/loop, fresh identity, or retry of an uncertain grant.
     pub(crate) async fn retry_held(&self) -> Result<RuntimeBudgetAttemptAdmission> {
+        self.retry_held_with_window(None).await
+    }
+
+    /// Transfer ordering custody only when the exact native writer starts.
+    /// Cancellation before that point releases promptly; afterward the shared
+    /// writer retains the window until actual join, never grants send authority.
+    pub(crate) async fn retry_held_with_window(
+        &self,
+        window: Option<Arc<()>>,
+    ) -> Result<RuntimeBudgetAttemptAdmission> {
+        let work = self.work.clone();
+        self.retry_held_using(window, move || work.authorize())
+            .await
+    }
+
+    async fn retry_held_using<F>(
+        &self,
+        window: Option<Arc<()>>,
+        authorize: F,
+    ) -> Result<RuntimeBudgetAttemptAdmission>
+    where
+        F: FnOnce() -> Result<RuntimeBudgetAttemptAdmission> + Send + 'static,
+    {
         let mut state = self.shared.0.lock().await;
         observe_wait_query(&mut state).await?;
         observe_query(&mut state).await?;
@@ -267,8 +324,8 @@ impl RuntimeBudgetAdmissionWork {
             ));
         }
         state.hold_epoch = None;
-        let work = self.work.clone();
-        state.writer = spawn(move || work.authorize());
+        state.reconsideration_window = window;
+        state.writer = spawn(authorize);
         observe_writer(&mut state).await;
         self.take_outcome(&mut state)
     }
@@ -336,6 +393,18 @@ impl RuntimeBudgetAdmissionWork {
     }
 
     #[cfg(test)]
+    pub(crate) async fn retry_held_with_for_test<F>(
+        &self,
+        window: Option<Arc<()>>,
+        authorize: F,
+    ) -> Result<RuntimeBudgetAttemptAdmission>
+    where
+        F: FnOnce() -> Result<RuntimeBudgetAttemptAdmission> + Send + 'static,
+    {
+        self.retry_held_using(window, authorize).await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn reconcile_with_for_test<F>(
         &self,
         query: F,
@@ -392,6 +461,7 @@ async fn observe_writer(state: &mut State) {
             ))
         });
         state.writer = Writer::Completed(result);
+        state.reconsideration_window = None;
     }
 }
 

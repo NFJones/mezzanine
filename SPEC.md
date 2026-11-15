@@ -16840,6 +16840,23 @@ new title admission. Human-paused, retired, dead or revoked waiters MUST NOT
 block an eligible title. Duplicate resume MUST NOT reserve capacity twice.
 These title-specific rules do not establish cross-family/root-wide inference
 fairness or activate production budgets.
+For already-held finite-root requests within one runtime, descriptive native
+progress MAY enter bounded cross-family reconsideration ordering. Metadata MUST
+retain only weak original hold/future captures, not native or expense owners or
+a second runnable queue. Only current quiescent, unpaused original claims qualify.
+One selected window per root MUST survive family adoption and the original native
+authorization reply even after the writer invalidates the prior hold epoch.
+Starting native reconsideration MUST transfer window custody to the actual
+retained writer until join; cancellation of its caller MUST NOT release that
+window while the writer remains unobserved or discard an original unused grant.
+Selection MUST NOT grant resume or send authority. Refused family adoption MUST
+release the window and rotate behind other eligible originals; dead, retired or
+paused candidates MUST NOT strand an eligible head. Unlimited requests MUST
+bypass this window and independent roots MUST NOT share it. Ordering metadata
+MUST remain bounded at 4096 live candidates/windows with checked monotonic order;
+capacity refusal MUST retain original caller custody without authorization.
+This does not qualify fairness against fresh initial requests or cross-runtime
+competitors, replace family schedulers/timer adoption, or activate budgeting.
 Human `/stop` MUST retire queued and claimed generated-title publication for the
 invoking conversation even when no ordinary turn is live. Original late-expense
 custody MUST survive; lifting budget policy MUST NOT revive that stopped title.

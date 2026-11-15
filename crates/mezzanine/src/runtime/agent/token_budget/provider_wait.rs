@@ -77,7 +77,7 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    fn budget_wait_turn(
+    pub(super) fn budget_wait_turn(
         &self,
         agent: &AgentId,
         turn: &str,

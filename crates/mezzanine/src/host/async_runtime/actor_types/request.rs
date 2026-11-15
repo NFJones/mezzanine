@@ -1057,6 +1057,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         capture: crate::runtime::RuntimeBudgetHeldAttempt,
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Orders a live held reconsideration; never authorizes transport or resume.
+    SelectBudgetReconsideration {
+        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+        future: std::sync::Weak<()>,
+        window: std::sync::Weak<()>,
+        reply: oneshot::Sender<Result<bool>>,
+    },
     /// Parks the original positively held provider claim. False means bounded
     /// timer capacity is unavailable before any wait mutation, not success.
     ParkBudgetProviderClaim {
@@ -1818,6 +1825,7 @@ impl AsyncRuntimeRequest {
             | Self::AgentTurnIsRunning { .. }
             | Self::ParkBudgetAuxiliaryClaim { .. }
             | Self::ResumeBudgetAuxiliaryClaim { .. }
+            | Self::SelectBudgetReconsideration { .. }
             | Self::ParkBudgetProviderClaim { .. }
             | Self::ReacquireBudgetProviderClaim { .. }
             | Self::AgentCompactionClaimIsCurrent { .. }

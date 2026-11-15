@@ -542,7 +542,12 @@ async fn qualify(disposition: Disposition) {
     }
 }
 
-async fn publish_policy(store: &TokenUsageStore, id: &str, digest: char, limits: BudgetLimits) {
+pub(super) async fn publish_policy(
+    store: &TokenUsageStore,
+    id: &str,
+    digest: char,
+    limits: BudgetLimits,
+) {
     let writer = store.clone();
     let id = id.to_owned();
     tokio::task::spawn_blocking(move || {

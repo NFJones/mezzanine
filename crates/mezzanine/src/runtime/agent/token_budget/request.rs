@@ -180,11 +180,41 @@ impl AttemptSource {
 )]
 pub(crate) struct RuntimeBudgetAttemptWork(Arc<AttemptSource>);
 
+/// Descriptive ordering metadata cannot keep expense or native ownership alive.
+#[derive(Debug, Clone)]
+pub(super) struct WeakAttemptWork(std::sync::Weak<AttemptSource>);
+
+impl WeakAttemptWork {
+    pub(super) fn upgrade(&self) -> Option<RuntimeBudgetAttemptWork> {
+        self.0.upgrade().map(RuntimeBudgetAttemptWork)
+    }
+}
+
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "concrete attempt admission is downstream")
 )]
 impl RuntimeBudgetAttemptWork {
+    pub(super) fn downgrade(&self) -> WeakAttemptWork {
+        WeakAttemptWork(Arc::downgrade(&self.0))
+    }
+
+    pub(super) fn root(&self) -> &mez_agent::token_budget::BudgetRootId {
+        &self.0.owner.member.root
+    }
+
+    pub(super) fn ordinary_subject(&self) -> Option<(&str, &str, u64)> {
+        if self.0.owner.auxiliary.is_some() {
+            return None;
+        }
+        let subject = self.0.wire_subject.get()?;
+        Some((
+            &subject.agent_id,
+            &subject.turn_id,
+            subject.claim_generation?,
+        ))
+    }
+
     /// Bind the original subject before authorization. This pure operation
     /// neither registers an attempt nor returns permission to send.
     pub(crate) fn plan_wire_receipt_subject(

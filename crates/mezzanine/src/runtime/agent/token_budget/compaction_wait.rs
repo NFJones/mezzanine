@@ -57,7 +57,7 @@ impl RuntimeSessionService {
         }
     }
 
-    fn budget_compaction_subject(
+    pub(super) fn budget_compaction_subject(
         &self,
         capture: &RuntimeBudgetHeldAttempt,
     ) -> Result<(String, u64)> {

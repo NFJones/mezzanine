@@ -146,7 +146,10 @@ impl Source {
         observation: &ProviderWireRequestObservation,
         reason: crate::storage::token_usage::budget::admission::BudgetAdmissionHold,
         previous: Option<&crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState>,
-    ) -> Result<crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState> {
+    ) -> Result<(
+        crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState,
+        Option<Arc<()>>,
+    )> {
         let ordinary = if capture.is_title()
             || capture.is_remember()
             || capture.compaction_subject().is_some()
@@ -216,7 +219,19 @@ impl Source {
                     && (!limits.requires_serial_inference() || !state.root_outstanding)
             });
             if reconsider_changed_hold(&state, previous, reason) && may_reconsider {
-                loop {
+                let window = Arc::new(());
+                let finite = state
+                    .limits
+                    .is_some_and(|limits| limits.requires_serial_inference());
+                if !finite
+                    || handle
+                        .select_budget_reconsideration(
+                            capture.clone(),
+                            Arc::downgrade(&auxiliary_waiter),
+                            Arc::downgrade(&window),
+                        )
+                        .await?
+                {
                     let ready = match &ordinary {
                         Some((agent, generation)) => {
                             handle
@@ -235,12 +250,9 @@ impl Source {
                         }
                     };
                     if ready {
-                        break;
+                        return Ok((state, finite.then_some(window)));
                     }
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    delay = delay.saturating_mul(2).min(2000);
                 }
-                return Ok(state);
             }
             tokio::time::sleep(Duration::from_millis(delay)).await;
             delay = delay.saturating_mul(2).min(2000);
@@ -374,27 +386,28 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                     .capture_held()
                     .await
                     .map_err(|_| suspended("original budget hold custody unavailable"))?;
-                previous = Some(
-                    self.0
-                        .wait_for_reacquisition(
-                            handle,
-                            &owner,
-                            capture,
-                            observation,
-                            *reason,
-                            previous.as_ref(),
-                        )
-                        .await
-                        .map_err(|_| suspended("original budget wait unavailable"))?,
-                );
+                let (state, reconsideration_window) = self
+                    .0
+                    .wait_for_reacquisition(
+                        handle,
+                        &owner,
+                        capture,
+                        observation,
+                        *reason,
+                        previous.as_ref(),
+                    )
+                    .await
+                    .map_err(|_| suspended("original budget wait unavailable"))?;
+                previous = Some(state);
                 // Fair selection and actor timer adoption precede this exact
                 // original positive hold's fresh native authorization.
                 #[cfg(test)]
                 self.0.work.await_title_grant_for_tests().await;
                 admission = owner
-                    .retry_held()
+                    .retry_held_with_window(reconsideration_window.clone())
                     .await
                     .map_err(|_| suspended("original budget reconsideration unavailable"))?;
+                drop(reconsideration_window);
             }
             let RuntimeBudgetAttemptAdmission::Authorized(permit) = admission else {
                 return Err(suspended(

@@ -1059,6 +1059,22 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Request ordering only, retaining both tokens in the original producer.
+    pub(crate) async fn select_budget_reconsideration(
+        &self,
+        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+        future: std::sync::Weak<()>,
+        window: std::sync::Weak<()>,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::SelectBudgetReconsideration {
+            capture,
+            future,
+            window,
+            reply,
+        })
+        .await?
+    }
+
     /// Adopt scheduler parking and original-key cancellation together. A false
     /// reply is provably unmutated timer pressure; callers retain and pace the
     /// same capture. Dropped replies are not authorization or retirement proof.

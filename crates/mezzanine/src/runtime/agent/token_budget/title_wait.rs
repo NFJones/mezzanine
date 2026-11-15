@@ -73,7 +73,10 @@ impl RuntimeSessionService {
 
     /// Returns only the actual current publication claim, never its separately
     /// retained late-expense owner. A cancelled title cannot regain authority.
-    fn budget_title_subject(&self, capture: &RuntimeBudgetHeldAttempt) -> Result<(String, String)> {
+    pub(super) fn budget_title_subject(
+        &self,
+        capture: &RuntimeBudgetHeldAttempt,
+    ) -> Result<(String, String)> {
         let Some(RuntimeBudgetAuxiliaryClaim::Title {
             conversation,
             dispatch,

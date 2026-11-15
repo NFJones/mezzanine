@@ -10,6 +10,7 @@ mod checkpoint;
 mod compaction_wait;
 mod descendants;
 mod reclamation;
+mod reconsideration;
 mod remember_wait;
 mod request;
 mod resolution;

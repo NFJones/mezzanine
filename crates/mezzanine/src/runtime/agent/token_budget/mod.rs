@@ -43,6 +43,7 @@ pub(crate) mod provider_wait;
 )]
 pub(crate) mod receipt_commit;
 mod reclamation;
+mod reconsideration;
 mod remember_wait;
 pub(crate) mod request;
 #[cfg_attr(
@@ -131,6 +132,8 @@ pub(crate) struct RuntimeBudgetMemberships {
     provider_waits: BTreeMap<String, provider_wait::ProviderWait>,
     /// Ordering only; actual ready title custody stays in its original claim.
     next_title_ready_order: u64,
+    /// Weak ordering metadata only; original claims keep all runnable custody.
+    reconsideration: reconsideration::ReconsiderationOrder,
     #[cfg(test)]
     fail_restore_after_install: bool,
 }

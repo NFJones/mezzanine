@@ -446,26 +446,55 @@ async fn runtime_budget_admission_commit_before_panic_recovers_evidence_never_pe
 
 #[tokio::test]
 async fn runtime_budget_admission_unused_retirement_joins_and_withdraws_only_original_permit() {
+    Box::pin(unused_retirement(false)).await;
+    Box::pin(unused_retirement(true)).await;
+}
+
+async fn unused_retirement(selected: bool) {
     let (scene, _owner, work) = case().await;
     let admission = work.admission_owner();
+    if selected {
+        publish(
+            &scene,
+            BudgetLimits {
+                input: TokenLimit::Limited(0),
+                output: TokenLimit::Unlimited,
+            },
+        )
+        .await;
+        assert!(matches!(
+            admission.claim().await.unwrap(),
+            RuntimeBudgetAttemptAdmission::Held(_)
+        ));
+        publish(&scene, BudgetLimits::default()).await;
+    }
+    let window = Arc::new(());
+    let weak_window = Arc::downgrade(&window);
     let original = admission.clone();
     let execute = work.clone();
     let (started, ready) = tokio::sync::oneshot::channel();
     let (release, blocked) = std::sync::mpsc::channel();
     let waiter = tokio::spawn(async move {
-        original
-            .claim_with_for_test(move || {
-                let _ = started.send(());
-                blocked
-                    .recv()
-                    .map_err(|_| MezError::invalid_state("fixture gate closed"))?;
-                execute.authorize()
-            })
-            .await
+        let authorize = move || {
+            let _ = started.send(());
+            blocked
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|_| MezError::invalid_state("fixture gate closed"))?;
+            execute.authorize()
+        };
+        if selected {
+            original
+                .retry_held_with_for_test(Some(window), authorize)
+                .await
+        } else {
+            drop(window);
+            original.claim_with_for_test(authorize).await
+        }
     });
     ready.await.unwrap();
     waiter.abort();
     assert!(waiter.await.unwrap_err().is_cancelled());
+    let kept_while_running = weak_window.upgrade().is_some();
     {
         let retirement = admission.retire_unused();
         tokio::pin!(retirement);
@@ -474,6 +503,7 @@ async fn runtime_budget_admission_unused_retirement_joins_and_withdraws_only_ori
     assert_eq!(grants(&scene), 0);
     release.send(()).unwrap();
     let unused = admission.retire_unused().await.unwrap().unwrap();
+    let released_after_join = weak_window.upgrade().is_none();
     assert_eq!(grants(&scene), 1);
     assert!(admission.retire_unused().await.unwrap().is_none());
     assert!(matches!(
@@ -494,6 +524,9 @@ async fn runtime_budget_admission_unused_retirement_joins_and_withdraws_only_ori
     assert_eq!(outstanding, 1);
     drop(unused);
     assert!(admission.retire_unused().await.unwrap().is_none());
+    drop((admission, work, _owner, scene));
+    assert_eq!(kept_while_running, selected);
+    assert!(released_after_join);
 }
 
 #[tokio::test]
