@@ -304,6 +304,46 @@ async fn boundary(responses: bool, stream: bool, held: bool, request_scoped: boo
                 factory.receipt_stages_for_test(&observation).1.unwrap()
             };
             let settled = retirement.commit_owner();
+            let producer = Arc::new(());
+            let capture = retirement
+                .capture_settled_response(Arc::downgrade(&producer))
+                .await
+                .unwrap();
+            assert!(
+                handle
+                    .park_budget_provider_claim(
+                        AgentId::opaque(observation.agent_id.clone()).unwrap(),
+                        observation.turn_id.clone(),
+                        8,
+                        crate::runtime::RuntimeBudgetProviderCapture::from(capture.clone()),
+                    )
+                    .await
+                    .is_err(),
+                "a terminal receipt cannot borrow a newer claim generation"
+            );
+            drop(producer);
+            assert!(
+                handle
+                    .park_budget_provider_claim(
+                        AgentId::opaque(observation.agent_id.clone()).unwrap(),
+                        observation.turn_id.clone(),
+                        7,
+                        crate::runtime::RuntimeBudgetProviderCapture::from(capture),
+                    )
+                    .await
+                    .is_err(),
+                "expense custody cannot keep a destroyed result runnable"
+            );
+            if !request_scoped {
+                let prefix = factory.receipt_stages_for_test(&observation).0;
+                let witness = Arc::new(());
+                assert!(
+                    prefix
+                        .capture_settled_response(Arc::downgrade(&witness))
+                        .await
+                        .is_err()
+                );
+            }
             let before = settled.observe_settlement().await.unwrap().unwrap();
             assert_eq!(
                 before.known,

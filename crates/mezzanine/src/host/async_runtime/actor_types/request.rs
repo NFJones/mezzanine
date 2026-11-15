@@ -1070,7 +1070,7 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         agent_id: AgentId,
         turn_id: String,
         generation: u64,
-        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+        capture: crate::runtime::RuntimeBudgetProviderCapture,
         reply: oneshot::Sender<Result<bool>>,
     },
     /// Fairly reacquires the same claim and adopts its timer before true. False
@@ -1079,7 +1079,7 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         agent_id: AgentId,
         turn_id: String,
         generation: u64,
-        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+        capture: crate::runtime::RuntimeBudgetProviderCapture,
         reply: oneshot::Sender<Result<bool>>,
     },
     /// Checks an already issued compaction claim without claiming or dispatching

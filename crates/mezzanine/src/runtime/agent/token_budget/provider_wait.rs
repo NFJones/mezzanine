@@ -1,16 +1,69 @@
-//! Scheduling custody for a positively held ORIGINAL inference worker.
+//! Scheduling custody for an unissued hold or a settled ORIGINAL response.
 //!
 //! This port does no I/O and grants no send permission. It keeps the ledger and
 //! original claim live while the existing scheduler releases/reacquires capacity.
 //! Reacquisition never queues a replacement provider continuation. The host must
 //! adopt the returned timer transition before resuming the original future and
-//! freshly reconsidering admission. Host/auxiliary assembly remains staged.
+//! freshly reconsidering admission or reobserving completion policy. Settled
+//! captures borrow the result's original future and never mint an inference
+//! hold epoch. Root-wide effect admission and activation remain staged.
 
 use super::{RuntimeSessionService, admission_work::RuntimeBudgetHeldAttempt};
 use crate::error::{MezError, Result};
 use crate::runtime::{RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
 use mez_agent::{AgentTurnRecord, AgentTurnState};
 use mez_core::ids::AgentId;
+
+/// Sealed reasons to retain the same original provider claim. Neither variant
+/// grants a send or effect; completion custody is never an inference Held epoch.
+#[derive(Debug, Clone)]
+pub(crate) enum RuntimeBudgetProviderCapture {
+    Inference(RuntimeBudgetHeldAttempt),
+    Settled(super::request::RuntimeBudgetSettledResponse),
+}
+
+impl From<RuntimeBudgetHeldAttempt> for RuntimeBudgetProviderCapture {
+    fn from(value: RuntimeBudgetHeldAttempt) -> Self {
+        Self::Inference(value)
+    }
+}
+impl From<&RuntimeBudgetHeldAttempt> for RuntimeBudgetProviderCapture {
+    fn from(value: &RuntimeBudgetHeldAttempt) -> Self {
+        Self::Inference(value.clone())
+    }
+}
+impl From<super::request::RuntimeBudgetSettledResponse> for RuntimeBudgetProviderCapture {
+    fn from(value: super::request::RuntimeBudgetSettledResponse) -> Self {
+        Self::Settled(value)
+    }
+}
+impl From<&RuntimeBudgetProviderCapture> for RuntimeBudgetProviderCapture {
+    fn from(value: &RuntimeBudgetProviderCapture) -> Self {
+        value.clone()
+    }
+}
+
+impl RuntimeBudgetProviderCapture {
+    fn matches_owner(&self, owner: &super::request::RuntimeBudgetRequestOwner) -> bool {
+        match self {
+            Self::Inference(c) => c.matches_owner(owner),
+            Self::Settled(c) => c.matches_owner(owner),
+        }
+    }
+    fn matches_claim(&self, agent: &str, turn: &str, generation: u64) -> bool {
+        match self {
+            Self::Inference(c) => c.matches_claim(agent, turn, generation),
+            Self::Settled(c) => c.matches_claim(agent, turn, generation),
+        }
+    }
+    fn same_capture(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Inference(a), Self::Inference(b)) => a.same_capture(b),
+            (Self::Settled(a), Self::Settled(b)) => a.same_capture(b),
+            _ => false,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -22,7 +75,7 @@ enum Phase {
 
 #[derive(Debug)]
 pub(super) struct ProviderWait {
-    capture: RuntimeBudgetHeldAttempt,
+    capture: RuntimeBudgetProviderCapture,
     generation: u64,
     started_at_ms: u64,
     phase: Phase,
@@ -82,8 +135,9 @@ impl RuntimeSessionService {
         agent: &AgentId,
         turn: &str,
         generation: u64,
-        capture: &RuntimeBudgetHeldAttempt,
+        capture: impl Into<RuntimeBudgetProviderCapture>,
     ) -> Result<AgentTurnRecord> {
+        let capture = capture.into();
         if !self.agent_provider_claim_matches(agent, turn, generation) {
             return Err(MezError::conflict("original budget provider claim changed"));
         }
@@ -125,9 +179,10 @@ impl RuntimeSessionService {
         agent: &AgentId,
         turn: &str,
         generation: u64,
-        capture: RuntimeBudgetHeldAttempt,
+        capture: impl Into<RuntimeBudgetProviderCapture>,
         now_ms: u64,
     ) -> Result<RuntimeTransition> {
+        let capture = capture.into();
         self.budget_wait_turn(agent, turn, generation, &capture)?;
         if let Some(wait) = self.agent.budget_memberships.provider_waits.get(turn) {
             if wait.generation == generation
@@ -189,7 +244,7 @@ impl RuntimeSessionService {
         agent: &AgentId,
         turn: &str,
         generation: u64,
-        capture: &RuntimeBudgetHeldAttempt,
+        capture: impl Into<RuntimeBudgetProviderCapture>,
     ) -> Result<()> {
         if self.try_requeue_budget_provider_claim(agent, turn, generation, capture)? {
             Ok(())
@@ -207,15 +262,16 @@ impl RuntimeSessionService {
         agent: &AgentId,
         turn: &str,
         generation: u64,
-        capture: &RuntimeBudgetHeldAttempt,
+        capture: impl Into<RuntimeBudgetProviderCapture>,
     ) -> Result<bool> {
-        self.budget_wait_turn(agent, turn, generation, capture)?;
+        let capture = capture.into();
+        self.budget_wait_turn(agent, turn, generation, &capture)?;
         let wait = self
             .agent
             .budget_memberships
             .provider_waits
             .get(turn)
-            .filter(|wait| wait.generation == generation && wait.capture.same_capture(capture))
+            .filter(|wait| wait.generation == generation && wait.capture.same_capture(&capture))
             .ok_or_else(|| MezError::conflict("original budget wait unavailable"))?;
         if wait.phase == Phase::Waiting {
             if let Err(error) = self.agent.agent_scheduler.requeue_waiting(turn) {
@@ -292,10 +348,11 @@ impl RuntimeSessionService {
         agent: &AgentId,
         turn: &str,
         generation: u64,
-        capture: &RuntimeBudgetHeldAttempt,
+        capture: impl Into<RuntimeBudgetProviderCapture>,
         now_ms: u64,
     ) -> Result<RuntimeTransition> {
-        self.budget_wait_turn(agent, turn, generation, capture)?;
+        let capture = capture.into();
+        self.budget_wait_turn(agent, turn, generation, &capture)?;
         if self.agent_turn_is_human_paused(turn) {
             return Err(MezError::conflict("budget provider remains human paused"));
         }
@@ -304,7 +361,7 @@ impl RuntimeSessionService {
             .budget_memberships
             .provider_waits
             .get(turn)
-            .filter(|wait| wait.generation == generation && wait.capture.same_capture(capture))
+            .filter(|wait| wait.generation == generation && wait.capture.same_capture(&capture))
             .ok_or_else(|| MezError::conflict("original budget wait unavailable"))?;
         if wait.phase == Phase::Active {
             return Ok(RuntimeTransition::default());

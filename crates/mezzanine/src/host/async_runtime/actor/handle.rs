@@ -1083,13 +1083,13 @@ impl AsyncRuntimeSessionHandle {
         agent_id: AgentId,
         turn_id: String,
         generation: u64,
-        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+        capture: impl Into<crate::runtime::RuntimeBudgetProviderCapture>,
     ) -> Result<bool> {
         self.request(|reply| AsyncRuntimeRequest::ParkBudgetProviderClaim {
             agent_id,
             turn_id,
             generation,
-            capture,
+            capture: capture.into(),
             reply,
         })
         .await?
@@ -1102,13 +1102,13 @@ impl AsyncRuntimeSessionHandle {
         agent_id: AgentId,
         turn_id: String,
         generation: u64,
-        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+        capture: impl Into<crate::runtime::RuntimeBudgetProviderCapture>,
     ) -> Result<bool> {
         self.request(|reply| AsyncRuntimeRequest::ReacquireBudgetProviderClaim {
             agent_id,
             turn_id,
             generation,
-            capture,
+            capture: capture.into(),
             reply,
         })
         .await?

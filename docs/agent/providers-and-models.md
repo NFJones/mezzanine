@@ -300,13 +300,24 @@ and absent or updating policy is unavailable, not unlimited. Equality exhausts a
 finite dimension; unknown remote usage is not fabricated as zero. Cancellation
 retains the original native read handle, while a later explicit read can refresh
 the snapshot. This port does not validate a live task, free exposure or authorize
-response publication/effects, and is not yet connected to completion gating.
+response publication/effects by itself.
 
 The native request source retains at most one original issued terminal-receipt
 descriptor, only after its durable retirement checkpoint. A newer exchange clears
 it; replaying an older checkpoint cannot restore it. Prefixes, zero-send refusals
 and unused permits do not qualify output. This request-local handoff is not an
 additional ledger or permission to publish a response or execute its actions.
+
+Staged monitored ordinary dispatch uses that original descriptor before returning
+its completed execution (including routing/judge dispatch branches). Equality or
+unavailable current policy/receipt observation retains the original result in its
+producer and parks a distinct receipt-qualified actor claim. A weak producer
+lifetime, exact current claim/native membership, fair scheduler reacquisition and
+original timer adoption remain required. A sufficient raise is reobserved after
+adoption without another inference, repair or fallback. Human Pause and Stop stay
+independent; read failures retain the result with paced, bounded diagnostics.
+This checkpoint is not the atomic root-wide effect fence: policy can change after
+observation, and actual effect admission and production activation remain pending.
 
 These internal allocation and accounting ports do **not** yet enable operational
 session budgets. Production assembly, fair waiting, complete terminal coverage,

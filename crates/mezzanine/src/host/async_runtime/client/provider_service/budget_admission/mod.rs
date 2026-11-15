@@ -72,10 +72,6 @@ impl BudgetRequestAdmission {
     /// only after its durable checkpoint. This does not validate live claims,
     /// current policy, response publication or effect authority. None includes
     /// no exchange, an unsettled newer exchange and a never-issued refusal.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "completion gate assembly remains staged")
-    )]
     pub(super) fn completed_receipt(&self) -> Result<Option<RuntimeBudgetReceiptWork>> {
         Ok(self
             .completion
@@ -93,6 +89,117 @@ impl BudgetRequestAdmission {
         self.waiter = Some(handle);
         self.deadline = Some(deadline);
         self
+    }
+
+    /// Retain the result in its ORIGINAL producer before Completed can escape.
+    /// This is a staged completion boundary, not atomic root-wide effect
+    /// admission. No request/repair/fallback is issued by policy observation.
+    pub(super) async fn wait_for_completion(
+        &self,
+        agent: &str,
+        turn: &str,
+        generation: u64,
+    ) -> Result<()> {
+        use crate::storage::token_usage::budget::receipts::BudgetSettlementState;
+        let handle = self
+            .waiter
+            .as_ref()
+            .ok_or_else(|| suspended("original completion waiter unavailable"))?;
+        let agent = AgentId::opaque(agent.to_owned())
+            .ok_or_else(|| suspended("original completion agent unavailable"))?;
+        let receipt = self
+            .completed_receipt()?
+            .ok_or_else(|| suspended("original completion retirement unavailable"))?;
+        let mut read_refused = false;
+        loop {
+            // One strong episode witness, owned only by this producer retaining
+            // its execution. A fresh episode after resumed-policy recrossing
+            // cannot renew active time or borrow an earlier wait allocation.
+            let future = Arc::new(());
+            let capture = receipt
+                .capture_settled_response(Arc::downgrade(&future))
+                .await?;
+            if completion_state(&receipt, &mut read_refused).await
+                == BudgetSettlementState::WithinKnownLimits
+            {
+                return Ok(());
+            }
+            let capture = crate::runtime::RuntimeBudgetProviderCapture::from(capture);
+            let mut delay = 100u64;
+            while !handle
+                .park_budget_provider_claim(
+                    agent.clone(),
+                    turn.to_owned(),
+                    generation,
+                    capture.clone(),
+                )
+                .await?
+            {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                delay = delay.saturating_mul(2).min(2000);
+            }
+            let inactive = self
+                .deadline
+                .as_ref()
+                .ok_or_else(|| suspended("original completion clock unavailable"))?
+                .park()?;
+            loop {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                delay = delay.saturating_mul(2).min(2000);
+                // Revalidate actual claim/weak-future custody even when policy
+                // is unchanged. Receipt expense alone cannot outlive Stop.
+                handle
+                    .park_budget_provider_claim(
+                        agent.clone(),
+                        turn.to_owned(),
+                        generation,
+                        capture.clone(),
+                    )
+                    .await?;
+                if completion_state(&receipt, &mut read_refused).await
+                    == BudgetSettlementState::WithinKnownLimits
+                    && handle
+                        .reacquire_budget_provider_claim(
+                            agent.clone(),
+                            turn.to_owned(),
+                            generation,
+                            capture.clone(),
+                        )
+                        .await?
+                {
+                    break;
+                }
+            }
+            drop(inactive);
+            // Actor selection is not a policy grant. Reobserve after adoption;
+            // another crossing parks this same result, never a new inference.
+        }
+    }
+}
+
+/// Read failure remains an operational hold, never numeric exhaustion or an
+/// excuse to discard/replay the response. Only transition-level diagnostics
+/// escape; the original query handle retains its existing cancellation custody.
+async fn completion_state(
+    receipt: &RuntimeBudgetReceiptWork,
+    refused: &mut bool,
+) -> crate::storage::token_usage::budget::receipts::BudgetSettlementState {
+    use crate::storage::token_usage::budget::receipts::BudgetSettlementState;
+    match receipt.commit_owner().observe_settlement().await {
+        Ok(Some(snapshot)) => {
+            *refused = false;
+            snapshot.state()
+        }
+        result => {
+            if !*refused {
+                eprintln!(
+                    "mezzanine: original budget completion observation unavailable ({:?}); response retained",
+                    result.err().map(|error| error.kind())
+                );
+                *refused = true;
+            }
+            BudgetSettlementState::PolicyUnavailable
+        }
     }
 }
 

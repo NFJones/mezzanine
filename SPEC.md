@@ -16584,6 +16584,19 @@ never-issued refusals and unused-permit retirement MUST NOT qualify response
 publication. This bounded handoff is descriptive custody, not a second ledger,
 live-claim proof, executable response gate or production activation.
 
+For staged ordinary provider completion, a sealed issued terminal receipt with
+its original durable ACK and a weak original-result lifetime MAY qualify a
+distinct settled-response wait. It MUST NOT be represented as an unissued Held
+epoch. The actor MUST validate the original current claim, generation, native
+membership and result lifetime before releasing scheduler capacity. The original
+producer MUST retain its response, not publish Completed, while known thresholds
+are exhausted or policy/accounting observation is unavailable. Read-only paced
+observation MUST NOT repeat inference, repair, fallback or uncertain writes.
+Sufficient policy permits only fair original-claim reacquisition and timer
+adoption followed by fresh observation; it MUST NOT renew active allowance,
+clear human Pause or revive Stop. This completion checkpoint is NOT an atomic
+root-wide effect-admission fence and MUST NOT activate production budgets.
+
 Telemetry schema16 adds a config-derived budget projection and exact publication
 receipts without replacing lifetime accounts. The primary config MUST remain the
 only authored global policy. An uninitialized, updating or conflicted projection

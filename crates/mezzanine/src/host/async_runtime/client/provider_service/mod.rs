@@ -2565,17 +2565,24 @@ async fn execute_runtime_agent_provider_dispatch_with_waiter(
     )
     .with_claim_generation(claim_generation)
     .with_pending_observations(pending_observations);
-    let execution_observer = match (_budget_owner.as_ref(), budget_waiter) {
+    let (execution_observer, completion_source) = match (_budget_owner.as_ref(), budget_waiter) {
         (Some(owner), Some(handle)) => {
             let clock = crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline::default();
-            execution_observer
-                .with_budget_deadline(clock.clone())
-                .with_budget_receipt_source(std::sync::Arc::new(
-                    budget_admission::BudgetRequestAdmission::new(owner.clone())
-                        .with_waiter(handle, clock),
-                ))?
+            let source = std::sync::Arc::new(
+                budget_admission::BudgetRequestAdmission::new(owner.clone())
+                    .with_waiter(handle, clock.clone()),
+            );
+            (
+                execution_observer
+                    .with_budget_deadline(clock)
+                    .with_budget_receipt_source(source.clone())?,
+                Some(source),
+            )
         }
-        (owner, _) => budget_admission::install_request_source(execution_observer, owner)?,
+        (owner, _) => (
+            budget_admission::install_request_source(execution_observer, owner)?,
+            None,
+        ),
     };
     let auxiliary_purpose = if sandbox_failure_assessment_request.is_some() {
         ProviderRequestPurpose::SandboxAssessment
@@ -2593,6 +2600,11 @@ async fn execute_runtime_agent_provider_dispatch_with_waiter(
             &request,
         )
         .await?;
+        if let Some(source) = &completion_source {
+            source
+                .wait_for_completion(&turn.agent_id, &turn.turn_id, claim_generation)
+                .await?;
+        }
         return Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
             super::AgentTurnExecution {
                 request,
@@ -2627,6 +2639,11 @@ async fn execute_runtime_agent_provider_dispatch_with_waiter(
             })?,
         )
         .await?;
+        if let Some(source) = &completion_source {
+            source
+                .wait_for_completion(&turn.agent_id, &turn.turn_id, claim_generation)
+                .await?;
+        }
         return Ok(RuntimeAgentProviderWorkerOutcome::RoutingSelected(
             Box::new(auto_sizing_execution.into_routing_selection()),
         ));
@@ -2675,6 +2692,11 @@ async fn execute_runtime_agent_provider_dispatch_with_waiter(
         }
     };
     execution.routing_token_usage_by_model = routing_token_usage_by_model;
+    if let Some(source) = &completion_source {
+        source
+            .wait_for_completion(&turn.agent_id, &turn.turn_id, claim_generation)
+            .await?;
+    }
     Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
         execution,
     )))

@@ -508,7 +508,7 @@ impl RuntimeBudgetIssuedAttempt {
                 ..Default::default()
             });
         self.registered
-            .freeze_exposure_retirement(observation, self.outcome(), terminal)
+            .freeze_exposure_retirement(observation, self.outcome(), terminal, true)
     }
 
     pub(crate) fn registered(&self) -> &RuntimeBudgetRegisteredAttempt {
@@ -551,6 +551,7 @@ impl RuntimeBudgetUnusedAttempt {
                 terminal: true,
                 ..Default::default()
             },
+            false,
         )
     }
 }
@@ -568,6 +569,7 @@ impl RuntimeBudgetRegisteredAttempt {
         observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
         outcome: &BudgetAdmissionOutcome,
         terminal: UsageSnapshot,
+        issued_retirement: bool,
     ) -> Result<RuntimeBudgetReceiptWork> {
         let prefix = self.freeze_wire_receipt(observation)?;
         let evidence =
@@ -597,6 +599,7 @@ impl RuntimeBudgetRegisteredAttempt {
             attempt: self.clone(),
             receipt: captured.receipt.clone()?,
             retirement: Some(captured.evidence.clone()),
+            issued_retirement,
             commit: std::sync::OnceLock::from(captured.commit.clone()),
         })))
     }
@@ -639,6 +642,7 @@ impl RuntimeBudgetRegisteredAttempt {
             receipt: captured.receipt.clone()?,
             retirement: None,
             commit: std::sync::OnceLock::from(captured.commit.clone()),
+            issued_retirement: false,
         })))
     }
 
@@ -728,6 +732,7 @@ impl RuntimeBudgetRegisteredAttempt {
             receipt,
             retirement: None,
             commit: std::sync::OnceLock::new(),
+            issued_retirement: false,
         })))
     }
 }
@@ -738,13 +743,68 @@ struct ReceiptSource {
     receipt: BudgetReceipt,
     retirement: Option<crate::storage::token_usage::budget::retirement::BudgetExposureRetirement>,
     commit: std::sync::OnceLock<super::receipt_commit::SharedReceiptCommit>,
+    // Sealed at consumed-versus-unused custody, never inferred from counters.
+    issued_retirement: bool,
 }
 
 /// Exact known usage plus original custody retained until real durable ACK.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBudgetReceiptWork(Arc<ReceiptSource>);
 
+/// A completed original producer, distinct from positive unissued admission.
+/// The strong future witness belongs only to the producer retaining its result.
+/// Expense/journal/actor clones cannot keep a destroyed response runnable.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeBudgetSettledResponse {
+    receipt: RuntimeBudgetReceiptWork,
+    future: std::sync::Weak<()>,
+}
+
+impl RuntimeBudgetSettledResponse {
+    pub(super) fn matches_owner(&self, owner: &RuntimeBudgetRequestOwner) -> bool {
+        self.future.upgrade().is_some()
+            && RuntimeBudgetAttemptWork(self.receipt.0.attempt.0.clone()).matches_owner(owner)
+    }
+
+    pub(super) fn matches_claim(&self, agent: &str, turn: &str, generation: u64) -> bool {
+        self.future.upgrade().is_some()
+            && self.receipt.0.attempt.0.owner.auxiliary.is_none()
+            && RuntimeBudgetAttemptWork(self.receipt.0.attempt.0.clone())
+                .matches_claim(agent, turn, generation)
+    }
+
+    pub(super) fn same_capture(&self, other: &Self) -> bool {
+        self.future.upgrade().is_some()
+            && self.future.ptr_eq(&other.future)
+            && Arc::ptr_eq(&self.receipt.0.attempt.0, &other.receipt.0.attempt.0)
+            && self.receipt.0.receipt == other.receipt.0.receipt
+    }
+}
+
 impl RuntimeBudgetReceiptWork {
+    /// Native read qualification only; no retry or current effect permission.
+    /// Prefix and withdrawn-unused receipts cannot suspend a completed response.
+    pub(crate) async fn capture_settled_response(
+        &self,
+        future: std::sync::Weak<()>,
+    ) -> Result<RuntimeBudgetSettledResponse> {
+        if !self.0.issued_retirement || self.0.retirement.is_none() || future.upgrade().is_none() {
+            return Err(MezError::conflict(
+                "original issued response retirement unavailable",
+            ));
+        }
+        let owner = self.commit_owner();
+        if owner.reconcile().await?.is_none() {
+            return Err(MezError::conflict(
+                "original response retirement is not durable",
+            ));
+        }
+        Ok(RuntimeBudgetSettledResponse {
+            receipt: self.clone(),
+            future,
+        })
+    }
+
     /// Pure capture; every clone of this immutable receipt shares one writer.
     /// The service must retain this owner outside cancellable ACK waiters.
     pub(crate) fn commit_owner(&self) -> super::receipt_commit::RuntimeBudgetReceiptCommit {

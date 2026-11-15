@@ -229,6 +229,7 @@ pub(crate) use agent::token_budget::admission_work::{
     RuntimeBudgetAdmissionWork, RuntimeBudgetHeldAttempt,
 };
 pub(crate) use agent::token_budget::auxiliary::RuntimeBudgetAuxiliarySource;
+pub(crate) use agent::token_budget::provider_wait::RuntimeBudgetProviderCapture;
 #[cfg_attr(
     not(test),
     allow(

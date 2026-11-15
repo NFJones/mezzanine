@@ -4,6 +4,7 @@
 
 mod admission;
 mod compaction_wait;
+mod completion_wait;
 mod dispatch;
 mod exposure;
 mod internal_retry;
