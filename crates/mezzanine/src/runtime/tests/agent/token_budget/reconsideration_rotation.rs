@@ -9,22 +9,71 @@ use crate::runtime::{
 use crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose;
 use std::sync::Arc;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeadState {
+    Ready,
+    Dropped,
+    Revoked,
+    Paused,
+}
+
 #[tokio::test]
 async fn runtime_budget_reconsideration_three_families_rotate_without_poll_overtaking() {
-    Box::pin(qualify(0)).await;
+    Box::pin(qualify(HeadState::Ready)).await;
 }
 
 #[tokio::test]
 async fn runtime_budget_reconsideration_dead_ready_head_does_not_strand_another_family() {
-    Box::pin(qualify(1)).await;
+    Box::pin(qualify(HeadState::Dropped)).await;
 }
 
 #[tokio::test]
 async fn runtime_budget_reconsideration_revoked_ready_head_does_not_strand_another_family() {
-    Box::pin(qualify(2)).await;
+    Box::pin(qualify(HeadState::Revoked)).await;
 }
 
-async fn qualify(stale: u8) {
+#[tokio::test]
+async fn runtime_budget_reconsideration_paused_heads_allow_child_progress_and_ordered_return() {
+    Box::pin(qualify(HeadState::Paused)).await;
+}
+
+async fn browser_input(
+    handle: &crate::host::async_runtime::AsyncRuntimeSessionHandle,
+    primary: &mez_core::ids::ClientId,
+    bytes: &[u8],
+) {
+    use crate::host::terminal::{AttachedTerminalClientStepPlan, TerminalClientLoopAction};
+    handle
+        .apply_attached_terminal_step_plan(
+            primary.clone(),
+            AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(bytes.to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+}
+
+async fn browser_view(handle: &crate::host::async_runtime::AsyncRuntimeSessionHandle) -> String {
+    handle
+        .render_client_view(
+            mez_mux::presentation::ClientViewRole::Primary,
+            mez_mux::layout::Size::new(120, 40).unwrap(),
+            crate::host::terminal::TerminalClientLoopConfig::default(),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .lines
+        .join("\n")
+}
+
+async fn qualify(stale: HeadState) {
     let (mut scene, ordinary, ordinary_work, ordinary_hold) =
         super::request::provider_wait::held().await;
     // Auxiliary config introduces real pane path-resolution requirements.
@@ -151,6 +200,14 @@ async fn qualify(stale: u8) {
         title.1.clone(),
         memory_admission,
     ];
+    if stale == HeadState::Paused {
+        // Browser controls require a genuine native pane incarnation. This
+        // disposable shell belongs to Scene and is terminated before oracles.
+        scene
+            .service
+            .start_initial_pane_process_with_start_directory(Some("/bin/sh"), &scene._root)
+            .unwrap();
+    }
     let service = std::mem::replace(&mut scene.service, super::test_runtime_service());
     let (handle, actor) =
         crate::host::async_runtime::AsyncRuntimeSessionActor::new(service, Default::default())
@@ -212,22 +269,43 @@ async fn qualify(stale: u8) {
                 .unwrap(),
         );
         drop(enrolled_window);
-        if stale == 1 {
+        if stale == HeadState::Dropped {
             futures[1].take();
         }
-        if stale == 2 {
+        if stale == HeadState::Revoked {
             let _ = admissions[1].retry_held().await.unwrap();
         }
+        if stale == HeadState::Paused {
+            browser_input(&handle, &primary, b"/list-agents --all\r").await;
+            let _ = browser_view(&handle).await;
+            browser_input(&handle, &primary, b"/agent-%1\r").await;
+            let _ = browser_view(&handle).await;
+            browser_input(&handle, &primary, b"p").await;
+            let paused = browser_view(&handle).await;
+            let cell = |column| -> String {
+                paused
+                    .lines()
+                    .skip_while(|line| !line.contains('├'))
+                    .skip(1)
+                    .take_while(|line| line.contains('│'))
+                    .filter_map(|line| line.split('│').nth(column))
+                    .map(str::trim)
+                    .collect()
+            };
+            checks.push(cell(1) == "agent-%1" && cell(7) == "paused");
+        }
         let mut observed = Vec::new();
-        let expected: Vec<usize> = if stale == 0 {
+        let mut expected: Vec<usize> = if stale == HeadState::Ready {
             (0..12).map(|i| (i + 1) % 3).collect()
+        } else if stale == HeadState::Paused {
+            vec![2; 12]
         } else {
             (0..12).map(|i| if i % 2 == 0 { 2 } else { 0 }).collect()
         };
         for index in &expected {
             // Ask the most recently selected contender first. It must not
             // overtake an older live original merely by polling more often.
-            let wrong = if stale == 0 {
+            let wrong = if stale == HeadState::Ready {
                 (index + 2) % 3
             } else {
                 2 - index
@@ -255,6 +333,53 @@ async fn qualify(stale: u8) {
                 observed.push(*index);
             }
         }
+        if stale == HeadState::Paused {
+            // Both parent claims were filtered while paused. Resume through
+            // the same captured browser target, then enroll them behind the
+            // child's existing position, never by creating another request.
+            browser_input(&handle, &primary, b"p").await;
+            browser_input(&handle, &primary, b"\x1b").await;
+            for index in [1, 0] {
+                let window = Arc::new(());
+                checks.push(
+                    !handle
+                        .select_budget_reconsideration(
+                            captures[index].clone(),
+                            Arc::downgrade(futures[index].as_ref().unwrap()),
+                            Arc::downgrade(&window),
+                        )
+                        .await
+                        .unwrap(),
+                );
+            }
+            let window = Arc::new(());
+            checks.push(
+                handle
+                    .select_budget_reconsideration(
+                        captures[2].clone(),
+                        Arc::downgrade(futures[2].as_ref().unwrap()),
+                        Arc::downgrade(&window),
+                    )
+                    .await
+                    .unwrap(),
+            );
+            drop(window);
+            for index in [1, 0, 2, 1, 0, 2] {
+                let window = Arc::new(());
+                if handle
+                    .select_budget_reconsideration(
+                        captures[index].clone(),
+                        Arc::downgrade(futures[index].as_ref().unwrap()),
+                        Arc::downgrade(&window),
+                    )
+                    .await
+                    .unwrap()
+                {
+                    observed.push(index);
+                }
+                expected.push(index);
+            }
+        }
         handle
             .execute_agent_shell_command(primary, "/stop".into())
             .await
@@ -277,7 +402,7 @@ async fn qualify(stale: u8) {
     drop(scene); // Retire exact owned native scene/root before final oracles.
     assert!(
         checks.iter().all(|check| *check),
-        "a newer poll overtook readiness: {checks:?}"
+        "a newer poll overtook readiness: {checks:?}; selected={observed:?}; expected={expected:?}"
     );
     assert_eq!(observed, expected);
 }

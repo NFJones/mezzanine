@@ -436,11 +436,36 @@ async fn runtime_budget_provider_wait_host_retains_pressure_and_sibling_failure(
                 );
                 assert!(handle.agent_turn_is_running(&turn.turn_id).await.unwrap());
                 handle
-                    .execute_agent_shell_command(primary.clone(), "/stop".into())
+                    .execute_terminal_command(primary.clone(), format!("select-pane -t {first}"))
                     .await
                     .unwrap();
                 handle
-                    .execute_terminal_command(primary.clone(), format!("select-pane -t {first}"))
+                    .execute_agent_shell_command(primary.clone(), "/stop".into())
+                    .await
+                    .unwrap();
+                // The queued sibling's off-actor history preparation owns
+                // physical writes. Its provider offer follows the actual
+                // worker join/adoption; do not Stop/remove its root earlier.
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        if handle
+                            .pending_agent_provider_tasks()
+                            .await
+                            .unwrap()
+                            .iter()
+                            .any(|task| {
+                                task.turn_id != turn.turn_id && task.turn_id != sibling.turn_id
+                            })
+                        {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                handle
+                    .execute_terminal_command(primary.clone(), format!("select-pane -t {second}"))
                     .await
                     .unwrap();
                 handle
