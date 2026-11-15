@@ -61,6 +61,42 @@ pub(crate) struct BudgetReceiptOutcome {
     pub reporting: Option<super::reporting::BudgetReportingProjection>,
 }
 
+/// One read snapshot, not a durable grant or proof of current task liveness.
+/// `receipt` remains the exact historical ACK; `known` and `revisions` describe
+/// the current account/policy at observation, including later original expense.
+/// Neither missing usage nor local transport retirement is inferred here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BudgetReceiptSettlement {
+    pub receipt: BudgetReceiptOutcome,
+    pub known: UsageTotals,
+    pub revisions: super::admission::BudgetAdmissionRevisions,
+    pub limits: Option<mez_agent::token_budget::BudgetLimits>,
+}
+
+/// Descriptive known-threshold state only. WithinKnownLimits grants no provider
+/// or effect permission and says nothing about unreported remote expense.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BudgetSettlementState {
+    PolicyUnavailable,
+    Exhausted { input: bool, output: bool },
+    WithinKnownLimits,
+}
+
+impl BudgetReceiptSettlement {
+    pub(crate) fn state(&self) -> BudgetSettlementState {
+        let Some(limits) = self.limits else {
+            return BudgetSettlementState::PolicyUnavailable;
+        };
+        let input = limits.input.exhausted(self.known.input);
+        let output = limits.output.exhausted(self.known.output);
+        if input || output {
+            BudgetSettlementState::Exhausted { input, output }
+        } else {
+            BudgetSettlementState::WithinKnownLimits
+        }
+    }
+}
+
 /// Keep the merged known subtotal separate from terminal missing-category facts.
 /// Reconstructing from only the last terminal observation would lose prefixes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +168,56 @@ impl TokenUsageStore {
         let inserted = register_attempt(&tx, attempt)?;
         tx.commit()?;
         Ok(inserted)
+    }
+
+    /// Existing-store, read-only observation qualified by an exact committed
+    /// receipt. Policy and current usage come from the SAME transaction, never
+    /// a historical receipt subtotal paired with a newer allowance. Absence is
+    /// not settlement. This does not require a still-live send binding, because
+    /// original expense remains observable after its task retires.
+    pub(crate) fn budget_receipt_settlement(
+        &self,
+        receipt: &BudgetReceipt,
+    ) -> Result<Option<BudgetReceiptSettlement>> {
+        receipt.attempt.validate()?;
+        let mut connection = self.open_budget_query()?;
+        let tx = connection.transaction()?;
+        if namespace(&tx)? != receipt.attempt.namespace {
+            return Err(MezError::conflict("budget settlement namespace mismatch"));
+        }
+        let Some(original) = receipt_outcome(&tx, receipt)? else {
+            return Ok(None);
+        };
+        if !attempt_registration(&tx, &receipt.attempt)? {
+            return Err(MezError::conflict(
+                "budget settlement original attempt unavailable",
+            ));
+        }
+        let account = account(&tx, &receipt.attempt.root)?;
+        if account.accounting_revision < original.accounting_revision
+            || account.known.input < original.known.input
+            || account.known.output < original.known.output
+        {
+            return Err(MezError::conflict("budget settlement account regressed"));
+        }
+        let projection = super::policy_projection::read_projection(&tx)?;
+        let limits =
+            projection
+                .admission_policy()
+                .map(|defaults| mez_agent::token_budget::BudgetLimits {
+                    input: account.input_override.resolve(defaults.input),
+                    output: account.output_override.resolve(defaults.output),
+                });
+        Ok(Some(BudgetReceiptSettlement {
+            receipt: original,
+            known: account.known,
+            revisions: super::admission::BudgetAdmissionRevisions {
+                projection: projection.revision,
+                root_policy: account.policy_revision,
+                accounting: account.accounting_revision,
+            },
+            limits,
+        }))
     }
 
     /// Commits ONLY the new known delta under original frozen provenance. Root

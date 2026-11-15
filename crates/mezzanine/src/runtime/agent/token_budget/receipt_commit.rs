@@ -10,7 +10,9 @@
 
 use super::request::RuntimeBudgetReceiptWork;
 use crate::error::{MezError, Result};
-use crate::storage::token_usage::budget::receipts::BudgetReceiptOutcome;
+use crate::storage::token_usage::budget::receipts::{
+    BudgetReceiptOutcome, BudgetReceiptSettlement,
+};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -29,6 +31,7 @@ struct State {
     query: Option<JoinHandle<Result<Option<BudgetReceiptOutcome>>>>,
     recovered: Option<BudgetReceiptOutcome>,
     retry_after_absence: bool,
+    settlement_query: Option<JoinHandle<Result<Option<BudgetReceiptSettlement>>>>,
 }
 
 /// Stored on the original receipt source, without a reverse source reference.
@@ -47,6 +50,54 @@ pub(crate) struct RuntimeBudgetReceiptCommit {
 impl RuntimeBudgetReceiptCommit {
     pub(super) fn new(work: RuntimeBudgetReceiptWork, shared: SharedReceiptCommit) -> Self {
         Self { work, shared }
+    }
+
+    /// Observe, never commit/retry, the original receipt and current policy.
+    /// An interrupted reader keeps its actual handle; the next caller observes
+    /// that same snapshot. After join, another explicit call may read fresher
+    /// revisions. No snapshot is a continuation or effect-admission permit.
+    pub(crate) async fn observe_settlement(&self) -> Result<Option<BudgetReceiptSettlement>> {
+        let work = self.work.clone();
+        self.observe_settlement_using(move || work.observe_settlement())
+            .await
+    }
+
+    async fn observe_settlement_using<F>(&self, query: F) -> Result<Option<BudgetReceiptSettlement>>
+    where
+        F: FnOnce() -> Result<Option<BudgetReceiptSettlement>> + Send + 'static,
+    {
+        let mut state = self.shared.0.lock().await;
+        if matches!(state.writer, Writer::Running(_)) {
+            let _ = observe_writer(&mut state).await;
+        }
+        if state.settlement_query.is_none() {
+            state.settlement_query = Some(tokio::task::spawn_blocking(query));
+        }
+        // The mutex excludes removal between installation and this borrow.
+        // Borrowing, rather than taking, preserves the handle on cancellation.
+        let result = state
+            .settlement_query
+            .as_mut()
+            .expect("installed settlement reader")
+            .await
+            .unwrap_or_else(|_| {
+                Err(MezError::invalid_state(
+                    "budget settlement reader join failed",
+                ))
+            });
+        state.settlement_query = None;
+        result
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn observe_settlement_with_for_test<F>(
+        &self,
+        query: F,
+    ) -> Result<Option<BudgetReceiptSettlement>>
+    where
+        F: FnOnce() -> Result<Option<BudgetReceiptSettlement>> + Send + 'static,
+    {
+        self.observe_settlement_using(query).await
     }
 
     /// Starts at most one writer, then borrows its handle until actual join.

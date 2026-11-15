@@ -292,6 +292,16 @@ grant or a record of an already handed-out permit cannot substitute for that
 custody. A failed terminal write retains the original withdrawn owner and fences journal
 acknowledgment; retries require actual writer observation and positive absence.
 
+An internal read-only settlement observation can pair an exact original receipt
+with a coherent current policy/usage snapshot. The receipt ACK stays historical;
+later expense, global publication and root overrides are observed with separate
+accounting, projection and root-policy revisions. Missing receipts stay absent,
+and absent or updating policy is unavailable, not unlimited. Equality exhausts a
+finite dimension; unknown remote usage is not fabricated as zero. Cancellation
+retains the original native read handle, while a later explicit read can refresh
+the snapshot. This port does not validate a live task, free exposure or authorize
+response publication/effects, and is not yet connected to completion gating.
+
 These internal allocation and accounting ports do **not** yet enable operational
 session budgets. Production assembly, fair waiting, complete terminal coverage,
 physical retirement, root-wide activity inhibition, policy controls, and their

@@ -51,6 +51,47 @@ fn receipt_count(scene: &Scene) -> i64 {
 }
 
 #[tokio::test]
+async fn runtime_budget_settlement_cancelled_reader_is_joined_without_receipt_replay() {
+    let mut scene = Scene::new();
+    let work = receipt(&mut scene).await;
+    let owner = work.commit_owner();
+    let ack = owner.commit().await.unwrap();
+    let original = owner.clone();
+    let query_work = work.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let waiter = tokio::spawn(async move {
+        original
+            .observe_settlement_with_for_test(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                let result = query_work.observe_settlement();
+                let _ = started.send(());
+                blocked.recv().map_err(|_| {
+                    MezError::invalid_state("fixture settlement reader released by cleanup")
+                })?;
+                result
+            })
+            .await
+    });
+    ready.await.unwrap();
+    waiter.abort();
+    let cancelled = waiter.await.unwrap_err().is_cancelled();
+    let mut sibling = Scene::new();
+    let other = receipt(&mut sibling).await;
+    let sibling_ack = other.commit_owner().commit().await.unwrap();
+    release.send(()).unwrap();
+    let observed = owner.observe_settlement().await.unwrap().unwrap();
+    assert!(cancelled);
+    assert_eq!(observed.receipt, ack);
+    assert_eq!(sibling_ack.known.input, 11);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(receipt_count(&scene), 1);
+    assert_eq!(owner.commit().await.unwrap(), ack);
+}
+
+#[tokio::test]
 async fn runtime_budget_receipt_commit_clones_share_one_actual_writer_and_original_ack() {
     let mut scene = Scene::new();
     let work = receipt(&mut scene).await;
@@ -107,6 +148,11 @@ async fn runtime_budget_receipt_cancelled_waiters_retain_actual_writer_until_joi
     // A query cannot certify absence while the original producer is live.
     {
         let query = owner.reconcile();
+        tokio::pin!(query);
+        assert!(futures_util::poll!(&mut query).is_pending());
+    }
+    {
+        let query = owner.observe_settlement();
         tokio::pin!(query);
         assert!(futures_util::poll!(&mut query).is_pending());
     }

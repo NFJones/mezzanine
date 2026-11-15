@@ -16562,6 +16562,20 @@ runtime-qualified original retirement may release exact custody. Schema migratio
 alone MUST NOT activate conversations, infer ancestry, authenticate policy edits,
 issue providers, publish global policy or claim the complete budget feature.
 
+An exact committed receipt MAY qualify a read-only settlement observation. The
+original receipt outcome MUST remain immutable; current known lifetime totals,
+effective limits and separate projection/root-policy/accounting revisions MUST
+come from one existing-store read transaction. Original attempt and receipt
+indexed provenance MUST match. Missing receipts MUST remain absence, and missing
+or updating policy MUST remain unavailable, never silently unlimited. Equality
+exhausts either finite dimension; missing usage MUST NOT become known zero.
+An interrupted observer MUST retain and join its original native query before
+replacing that query. A later explicit observation MAY read newer revisions.
+This descriptive snapshot MUST NOT prove live membership, transport retirement,
+current continuation permission or effect admission. Those owners MUST revalidate
+their own boundaries; the observation port alone MUST NOT claim response gating
+or activate production budgets. No persisted receipt format changes are implied.
+
 Telemetry schema16 adds a config-derived budget projection and exact publication
 receipts without replacing lifetime accounts. The primary config MUST remain the
 only authored global policy. An uninitialized, updating or conflicted projection

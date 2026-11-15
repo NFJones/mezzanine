@@ -254,6 +254,38 @@ async fn boundary(responses: bool, stream: bool, held: bool) {
                 }
             );
             assert_eq!(rows(&store, "budget_receipts"), 2);
+            let (_, retirement) = factory.receipt_stages_for_test(&observation);
+            let settled = retirement.unwrap().commit_owner();
+            let before = settled.observe_settlement().await.unwrap().unwrap();
+            assert_eq!(
+                before.known,
+                UsageTotals {
+                    input: 11,
+                    output: 3
+                }
+            );
+            assert_eq!(before.receipt.root, member.root);
+            assert_eq!(before.state(), crate::storage::token_usage::budget::receipts::BudgetSettlementState::WithinKnownLimits);
+            super::remember_retirement::publish_policy(
+                &store,
+                "settled-exact-crossing",
+                'd',
+                BudgetLimits {
+                    input: TokenLimit::Limited(11),
+                    output: TokenLimit::Unlimited,
+                },
+            )
+            .await;
+            let crossed = settled.observe_settlement().await.unwrap().unwrap();
+            assert_eq!(crossed.receipt, before.receipt);
+            assert!(crossed.revisions.projection > before.revisions.projection);
+            assert_eq!(
+                crossed.state(),
+                crate::storage::token_usage::budget::receipts::BudgetSettlementState::Exhausted {
+                    input: true,
+                    output: false
+                }
+            );
             assert_eq!(
                 rows(&store, "budget_admissions"),
                 1,

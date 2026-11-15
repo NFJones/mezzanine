@@ -792,4 +792,19 @@ impl RuntimeBudgetReceiptWork {
             .store
             .budget_receipt_outcome(&self.0.receipt)
     }
+
+    /// Blocking read only: exact original receipt plus current coherent policy
+    /// and lifetime subtotal. This is not permission to publish effects, send,
+    /// replay work, or retire exposure; those need their original owners.
+    pub(in crate::runtime) fn observe_settlement(
+        &self,
+    ) -> Result<Option<crate::storage::token_usage::budget::receipts::BudgetReceiptSettlement>>
+    {
+        self.0
+            .attempt
+            .0
+            .owner
+            .store
+            .budget_receipt_settlement(&self.0.receipt)
+    }
 }

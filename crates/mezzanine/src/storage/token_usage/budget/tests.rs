@@ -14,6 +14,7 @@ mod reconciliation;
 mod reporting;
 mod resolution;
 mod retirement;
+mod settlement;
 
 struct Fixture {
     store: TokenUsageStore,
