@@ -1,5 +1,5 @@
 //! Actual HTTP response -> durable terminal receipt -> original monitor hold.
-//! The candidate is inspected after release, not executed by this fixture.
+//! Adoption controls also execute the original harmless native candidate once.
 
 use super::*;
 use crate::host::async_runtime::AsyncRuntimeSessionActor;
@@ -10,22 +10,70 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn budget_completed_response_equality_holds_original_until_sufficient_raise() {
-    qualify(false, false).await;
+    Box::pin(qualify(CompletionCase::Release)).await;
 }
 
 #[tokio::test]
 async fn budget_completed_response_stop_cannot_publish_after_policy_raise() {
-    qualify(true, false).await;
+    Box::pin(qualify(CompletionCase::Stop)).await;
 }
 
 #[tokio::test]
 async fn budget_completed_response_read_refusal_retains_original_until_recovery() {
-    qualify(false, true).await;
+    Box::pin(qualify(CompletionCase::ReadFailure)).await;
 }
 
-async fn qualify(stop: bool, read_failure: bool) {
+#[tokio::test]
+async fn budget_completed_response_adopts_and_executes_original_native_candidate_once() {
+    Box::pin(qualify(CompletionCase::Adopt)).await;
+}
+
+#[tokio::test]
+async fn budget_completed_response_stop_after_producer_release_refuses_actor_adoption() {
+    Box::pin(qualify(CompletionCase::StopBeforeAdoption)).await;
+}
+
+#[tokio::test]
+async fn budget_completed_response_human_pause_is_independent_in_both_release_orders() {
+    for mode in [CompletionCase::BudgetFirst, CompletionCase::HumanFirst] {
+        Box::pin(qualify(mode)).await;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompletionCase {
+    Release,
+    Stop,
+    ReadFailure,
+    Adopt,
+    StopBeforeAdoption,
+    BudgetFirst,
+    HumanFirst,
+    MonitorError,
+}
+
+#[tokio::test]
+async fn budget_completed_response_native_monitor_error_retires_retained_writer() {
+    Box::pin(qualify(CompletionCase::MonitorError)).await;
+}
+
+async fn qualify(mode: CompletionCase) {
+    let stop = mode == CompletionCase::Stop;
+    let read_failure = mode == CompletionCase::ReadFailure;
+    let adopt = matches!(
+        mode,
+        CompletionCase::Adopt
+            | CompletionCase::StopBeforeAdoption
+            | CompletionCase::BudgetFirst
+            | CompletionCase::HumanFirst
+            | CompletionCase::MonitorError
+    );
+    let human = matches!(
+        mode,
+        CompletionCase::BudgetFirst | CompletionCase::HumanFirst
+    );
     let Prepared {
-        service,
+        mut service,
         mut dispatch,
         store,
         member,
@@ -35,6 +83,20 @@ async fn qualify(stop: bool, read_failure: bool) {
         output: TokenLimit::Limited(3),
     })
     .await;
+    // Only this private native-effect control bypasses interactive approval;
+    // policy/scope admission and actual executor/retirement remain production.
+    if adopt {
+        service.permission_policy_mut().set_approval_bypass(true);
+    }
+    let counter = root.0.as_ref().unwrap().join("retained-candidate-count");
+    let command = if adopt {
+        format!(
+            "printf x >> '{}'; printf retained-native-candidate",
+            counter.display()
+        )
+    } else {
+        "printf retained-native-candidate".to_owned()
+    };
     let primary = service
         .session()
         .clients()
@@ -81,7 +143,7 @@ async fn qualify(stop: bool, read_failure: bool) {
             assert!(bytes.len() < 1024 * 1024);
         }
         count.fetch_add(1, Ordering::SeqCst);
-        let content = serde_json::json!({"rationale":"fixture", "actions":[{"type":"shell_command", "summary":"Original retained candidate", "command":"printf retained-native-candidate"}]}).to_string();
+        let content = serde_json::json!({"rationale":"fixture", "actions":[{"type":"shell_command", "summary":"Original retained candidate", "command":command}]}).to_string();
         let body = serde_json::json!({"id":"original-completion", "choices":[{"index":0,"message":{"role":"assistant","content":content},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}).to_string();
         socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
         // Observe any unexpected retry instead of disappearing after reply one.
@@ -92,7 +154,17 @@ async fn qualify(stop: bool, read_failure: bool) {
     });
     let (handle, actor) = AsyncRuntimeSessionActor::new(service, Default::default()).unwrap();
     let drains = ProviderObservationDrains::default();
+    let native_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let control = async {
+        let mut native_workers = JoinSet::new();
+        let mut native_owners = AgentProviderWorkerOwners::default();
+        let mut fault_owner = None;
+        let mut report = AsyncAgentProviderPollReport {
+            polls: 0,
+            executions: 0,
+            idle_polls: 0,
+            terminal_state: RuntimeLifecycleState::Running,
+        };
         let mut worker = tokio::spawn(monitor_runtime_agent_provider_dispatch(
             handle.clone(),
             agent,
@@ -119,6 +191,20 @@ async fn qualify(stop: bool, read_failure: bool) {
             if rows(&store, "budget_receipts") != 2 || !handle.agent_turn_is_running(&turn).await.unwrap() {
                 return Err("original terminal receipt or claim missing".to_owned());
             }
+            if counter.exists() || handle.drain_runtime_side_effects(256).await.unwrap().iter().any(|effect| matches!(effect,
+                crate::runtime::RuntimeSideEffect::DispatchNativeShellAction { turn_id, .. } if turn_id == &turn
+            )) {
+                return Err("candidate reached native action admission while completion held".to_owned());
+            }
+            if human {
+                waiting::browser_input(&handle, &primary, b"/list-agents --all\r").await;
+                waiting::browser_input(&handle, &primary, b"p").await;
+                waiting::assert_browser_paused(&handle, "%1", true).await;
+                if mode == CompletionCase::HumanFirst {
+                    waiting::browser_input(&handle, &primary, b"p").await;
+                    waiting::assert_browser_paused(&handle, "%1", false).await;
+                }
+            }
             // Clearing input alone cannot release the exhausted output side.
             super::remember_retirement::publish_policy(&store, "completion-insufficient", 'c', BudgetLimits {
                 input: TokenLimit::Unlimited, output: TokenLimit::Limited(3),
@@ -138,6 +224,14 @@ async fn qualify(stop: bool, read_failure: bool) {
             } else { None };
             if stop { handle.execute_agent_shell_command(primary.clone(), "/stop".into()).await.unwrap(); }
             super::remember_retirement::publish_policy(&store, "completion-release", 'd', BudgetLimits::default()).await;
+            if mode == CompletionCase::BudgetFirst {
+                let early = tokio::time::timeout(Duration::from_millis(2300), &mut worker).await;
+                joined |= early.is_ok();
+                if early.is_ok() { return Err("budget lift cleared independent human Pause".to_owned()); }
+                waiting::assert_browser_paused(&handle, "%1", true).await;
+                waiting::browser_input(&handle, &primary, b"p").await;
+                waiting::assert_browser_paused(&handle, "%1", false).await;
+            }
             if let Some((id, body)) = original {
                 let early = tokio::time::timeout(Duration::from_millis(2300), &mut worker).await;
                 // A ready JoinHandle has already been consumed, even if the
@@ -157,12 +251,80 @@ async fn qualify(stop: bool, read_failure: bool) {
             joined = true;
             let event = event
                 .map_err(|error| error.to_string())?.map_err(|error| error.to_string())?;
-            let published = match event {
+            let published = match &event {
                 Some((RuntimeEvent::AgentProvider(AgentProviderEvent::Completed { execution, .. }), _)) => {
                     execution.response.action_batch.is_some() && execution.response.raw_text.contains("retained-native-candidate")
                 }
                 _ => false,
             };
+            if adopt {
+                let (event, _) = event.ok_or_else(|| "original completion missing at adoption".to_owned())?;
+                if mode == CompletionCase::StopBeforeAdoption {
+                    handle.execute_agent_shell_command(primary.clone(), "/stop".into()).await.unwrap();
+                }
+                let mut batch = RuntimeEventBatch::new();
+                batch.push(event.clone());
+                let adopted = handle.submit_runtime_events(batch).await.map_err(|error| error.to_string())?;
+                let expected = mode != CompletionCase::StopBeforeAdoption;
+                if (adopted.applied > 0) != expected { return Err("original Completed adoption disposition changed".to_owned()); }
+                let offers = handle.drain_runtime_side_effects(256).await.unwrap().into_iter().filter_map(|effect| match effect {
+                    crate::runtime::RuntimeSideEffect::DispatchNativeShellAction { turn_id, action_id } if turn_id == turn => Some(action_id),
+                    _ => None,
+                }).collect::<Vec<_>>();
+                if offers.len() != usize::from(expected) { return Err(format!("native candidate offers: expected {expected}, got {}", offers.len())); }
+                if let Some(action) = offers.first() {
+                    let native = handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap()
+                        .ok_or_else(|| "original native offer did not claim".to_owned())?;
+                    if mode == CompletionCase::MonitorError {
+                        let owner = NativeWorkerOwner::new(&native);
+                        fault_owner = Some(owner.clone());
+                        let monitor_owner = owner.clone();
+                        let finished = native_finished.clone();
+                        spawn_owned_native_agent_worker(&mut native_workers, &mut native_owners, owner, async move {
+                            let (progress, _) = tokio::sync::watch::channel(None);
+                            let (entered, started) = tokio::sync::oneshot::channel();
+                            monitor_owner.start(native, progress, move |dispatch, progress| {
+                                let _ = entered.send(());
+                                // A real retained blocking writer remains live until
+                                // exact owner retirement cancels this genuine dispatch.
+                                let deadline = std::time::Instant::now() + Duration::from_secs(8);
+                                let cancelled = dispatch.cancellation.flag();
+                                while !cancelled.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+                                    std::thread::sleep(Duration::from_millis(1));
+                                }
+                                let result = crate::runtime::execute_native_shell_dispatch_with_progress(dispatch, progress);
+                                finished.store(true, Ordering::SeqCst);
+                                result
+                            }).await?;
+                            // Retiring a still-queued blocking task is valid but
+                            // does not exercise this running-closure cleanup cut.
+                            tokio::time::timeout(Duration::from_secs(5), started).await
+                                .map_err(|_| MezError::invalid_state("native fixture closure entry timed out"))?
+                                .map_err(|_| MezError::invalid_state("native fixture closure entry lost"))?;
+                            Err(MezError::invalid_state("injected completion native monitor error"))
+                        });
+                    } else {
+                        spawn_native_shell_action_worker(&mut native_workers, &mut native_owners, handle.clone(), native,
+                            crate::runtime::execute_native_shell_dispatch_with_progress);
+                    }
+                    let result = tokio::time::timeout(Duration::from_secs(8), native_workers.join_next_with_id()).await
+                        .map_err(|_| "original native monitor did not finish".to_owned())?.unwrap();
+                    let recorded = record_owned_agent_provider_worker(result, &handle, &mut report, &mut native_owners, &drains).await;
+                    if mode == CompletionCase::MonitorError
+                        && (native_owners.is_empty() || native_finished.load(Ordering::SeqCst)) {
+                        return Err("fault did not retain outstanding native custody".to_owned());
+                    }
+                    recorded.map_err(|error| error.to_string())?;
+                    if handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap().is_some() {
+                        return Err("native candidate was claimable twice".to_owned());
+                    }
+                }
+                let mut duplicate = RuntimeEventBatch::new();
+                duplicate.push(event);
+                if handle.submit_runtime_events(duplicate).await.unwrap().applied != 0 {
+                    return Err("duplicate Completed reapplied response".to_owned());
+                }
+            }
             Ok(published)
         }).catch_unwind().await;
         // Own and join the actual monitor before collecting producer drains.
@@ -172,6 +334,42 @@ async fn qualify(stop: bool, read_failure: bool) {
             }
             let _ = worker.await;
         }
+        // Join the actual native monitor (including on exercise failure), then
+        // settle its retained worker outcome before snapshotting request drains.
+        // A consumed error join can leave its actual producer in the owner
+        // map. The full retirement boundary visits those retained entries too.
+        let mut failures = ProviderCleanupFailures::default();
+        let mut native_cleanup_error = retire_agent_provider_workers(
+            &mut native_workers,
+            &handle,
+            &drains,
+            &mut native_owners,
+            &mut failures,
+        )
+        .await
+        .err();
+        let retired_without_fallback = native_owners.is_empty()
+            && (fault_owner.is_none() || native_finished.load(Ordering::SeqCst));
+        drop(native_owners);
+        // Safety-only fallback makes the RED assertion cleanup-safe. It is
+        // deliberately excluded from the primary retirement oracle above.
+        if !retired_without_fallback {
+            let owner = fault_owner.as_ref().unwrap();
+            let result = owner.retire("completion fixture safety retirement").await;
+            match result {
+                Ok(outcome) => {
+                    let mut batch = RuntimeEventBatch::new();
+                    batch.push(RuntimeEvent::NativeShell(outcome));
+                    if let Err(error) = handle.submit_runtime_events(batch).await {
+                        native_cleanup_error.get_or_insert(error);
+                    }
+                }
+                Err(error) => {
+                    native_cleanup_error.get_or_insert(error);
+                }
+            }
+        }
+        drop(fault_owner);
         server.abort();
         let server_result = server.await;
         let cleanup = async {
@@ -189,11 +387,18 @@ async fn qualify(stop: bool, read_failure: bool) {
             handle.shutdown().await
         }
         .await;
-        (exercise, server_result, cleanup)
+        (
+            exercise,
+            server_result,
+            cleanup.and(native_cleanup_error.map_or(Ok(()), Err)),
+            retired_without_fallback,
+        )
     };
-    let ((exercise, server_result, cleanup), mut exit) = tokio::join!(control, actor.run());
+    let ((exercise, server_result, cleanup, retired_without_fallback), mut exit) =
+        tokio::join!(control, actor.run());
     exit.service.terminate_all_pane_processes().unwrap();
     let known = store.budget_account(&member.root).unwrap().known;
+    let effects = std::fs::read(&counter).unwrap_or_default();
     let outstanding: i64 = rusqlite::Connection::open(store.path()).unwrap().query_row(
         "SELECT COUNT(*) FROM (SELECT id FROM budget_attempts WHERE terminal=0 UNION SELECT attempt FROM budget_admissions WHERE retired_receipt IS NULL)", [], |row| row.get(0),
     ).unwrap();
@@ -202,6 +407,21 @@ async fn qualify(stop: bool, read_failure: bool) {
     cleanup.unwrap();
     assert!(server_result.unwrap_err().is_cancelled());
     let published = match exercise {
+        Ok(Err(error)) if mode == CompletionCase::MonitorError => {
+            assert!(
+                error.contains("injected completion native monitor error"),
+                "original monitor cause lost: {error}"
+            );
+            assert!(
+                native_finished.load(Ordering::SeqCst),
+                "safety retirement did not destroy writer"
+            );
+            assert!(
+                retired_without_fallback,
+                "primary cleanup dropped retained native writer"
+            );
+            true
+        }
         Ok(result) => result.unwrap(),
         Err(panic) => std::panic::resume_unwind(panic),
     };
@@ -219,4 +439,18 @@ async fn qualify(stop: bool, read_failure: bool) {
         }
     );
     assert_eq!(outstanding, 0);
+    assert_eq!(
+        effects,
+        if adopt
+            && !matches!(
+                mode,
+                CompletionCase::StopBeforeAdoption | CompletionCase::MonitorError
+            )
+        {
+            b"x".as_slice()
+        } else {
+            b"".as_slice()
+        },
+        "only the once-adopted original candidate may execute"
+    );
 }
