@@ -1898,6 +1898,29 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         provider_event: AgentProviderEvent,
     ) -> Result<RuntimeTransition> {
+        let (provider_event, budget_settlement) = match provider_event {
+            AgentProviderEvent::BudgetSettled {
+                completion,
+                settlement,
+            } => {
+                if !matches!(
+                    *completion,
+                    AgentProviderEvent::Completed { .. }
+                        | AgentProviderEvent::RoutingSelected { .. }
+                ) {
+                    return Err(MezError::invalid_args(
+                        "budget settlement requires one successful provider result",
+                    ));
+                }
+                if !settlement.matches_result(&completion) {
+                    return Err(MezError::conflict(
+                        "original budget completion result changed",
+                    ));
+                }
+                (*completion, Some(settlement))
+            }
+            event => (event, None),
+        };
         let (provider_event, local_request_failure) = match provider_event {
             AgentProviderEvent::LocalRequestFailure { failure } => {
                 if !matches!(
@@ -1929,6 +1952,7 @@ impl AsyncRuntimeSessionActor {
         };
         match provider_event {
             AgentProviderEvent::CanonicalFailure { .. }
+            | AgentProviderEvent::BudgetSettled { .. }
             | AgentProviderEvent::LocalRequestFailure { .. } => {
                 unreachable!("the validated wrapper is unwrapped once above")
             }
@@ -1947,6 +1971,16 @@ impl AsyncRuntimeSessionActor {
                     claim_generation,
                     &selection.routing_token_usage_by_model,
                 );
+                if budget_settlement.as_ref().is_some_and(|settlement| {
+                    !self.service.budget_provider_settlement_matches(
+                        &agent_id,
+                        &turn_id,
+                        claim_generation,
+                        settlement,
+                    )
+                }) {
+                    return Ok(RuntimeTransition::default());
+                }
                 if !self
                     .service
                     .agent_provider_claim_matches(&agent_id, &turn_id, claim_generation)
@@ -2172,6 +2206,16 @@ impl AsyncRuntimeSessionActor {
                     claim_generation,
                     &execution,
                 );
+                if budget_settlement.as_ref().is_some_and(|settlement| {
+                    !self.service.budget_provider_settlement_matches(
+                        &agent_id,
+                        &turn_id,
+                        claim_generation,
+                        settlement,
+                    )
+                }) {
+                    return Ok(RuntimeTransition::default());
+                }
                 if !self
                     .service
                     .agent_provider_claim_matches(&agent_id, &turn_id, claim_generation)

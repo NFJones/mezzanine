@@ -752,15 +752,192 @@ struct ReceiptSource {
 pub(crate) struct RuntimeBudgetReceiptWork(Arc<ReceiptSource>);
 
 /// A completed original producer, distinct from positive unissued admission.
-/// The strong future witness belongs only to the producer retaining its result.
-/// Expense/journal/actor clones cannot keep a destroyed response runnable.
+/// The strong future witness belongs to the producer, then its exact result
+/// delivery envelope. Expense/journal/parked-wait clones remain weak and cannot
+/// keep a destroyed response runnable or manufacture a replacement result.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBudgetSettledResponse {
     receipt: RuntimeBudgetReceiptWork,
     future: std::sync::Weak<()>,
 }
 
+/// Opaque original-result delivery custody, not an effect or policy permit.
+/// Only a qualified issued terminal receipt can construct this envelope. Its
+/// first successful observation and final release observation remain distinct;
+/// neither is claimed to be current when the actor later receives the result.
+/// Clones retain the same delivery identity and original result-lifetime token.
+#[derive(Clone)]
+pub struct RuntimeBudgetProviderSettlement(Arc<ProviderSettlement>, Option<Arc<ProviderResult>>);
+
+// One immutable semantic before-image per delivered result, shared by clones.
+// No Debug/serialization projection or hash can omit a control-bearing field.
+enum ProviderResult {
+    Execution(Box<mez_agent::AgentTurnExecution>),
+    Routing(Box<mez_agent::AutoSizingRoutingSelection>),
+}
+
+struct ProviderSettlement {
+    capture: RuntimeBudgetSettledResponse,
+    _future: Arc<()>,
+    first: crate::storage::token_usage::budget::receipts::BudgetReceiptSettlement,
+    released: crate::storage::token_usage::budget::receipts::BudgetReceiptSettlement,
+}
+
+impl std::fmt::Debug for RuntimeBudgetProviderSettlement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeBudgetProviderSettlement")
+            .field("first_state", &self.0.first.state())
+            .field("released_state", &self.0.released.state())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for RuntimeBudgetProviderSettlement {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+            && match (&self.1, &other.1) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+    }
+}
+impl Eq for RuntimeBudgetProviderSettlement {}
+
+impl RuntimeBudgetProviderSettlement {
+    pub(crate) fn bind_execution(
+        mut self,
+        execution: &mez_agent::AgentTurnExecution,
+    ) -> Result<Self> {
+        self.bind_result(ProviderResult::Execution(Box::new(execution.clone())))?;
+        Ok(self)
+    }
+
+    pub(crate) fn bind_routing(
+        mut self,
+        selection: &mez_agent::AutoSizingRoutingSelection,
+    ) -> Result<Self> {
+        self.bind_result(ProviderResult::Routing(Box::new(selection.clone())))?;
+        Ok(self)
+    }
+
+    fn bind_result(&mut self, result: ProviderResult) -> Result<()> {
+        if self.1.is_some() {
+            return Err(MezError::conflict(
+                "original budget completion already bound",
+            ));
+        }
+        self.1 = Some(Arc::new(result));
+        Ok(())
+    }
+
+    /// Frozen identity and full semantic payload, NOT current claim liveness.
+    /// A genuine stale original still reaches independent expense settlement.
+    pub(crate) fn matches_result(&self, event: &crate::runtime::AgentProviderEvent) -> bool {
+        use crate::runtime::AgentProviderEvent;
+        match (self.1.as_deref(), event) {
+            (
+                Some(ProviderResult::Execution(original)),
+                AgentProviderEvent::Completed {
+                    agent_id,
+                    turn_id,
+                    claim_generation,
+                    execution,
+                },
+            ) => {
+                original == execution
+                    && self
+                        .0
+                        .capture
+                        .matches_claim(agent_id.as_str(), turn_id, *claim_generation)
+            }
+            (
+                Some(ProviderResult::Routing(original)),
+                AgentProviderEvent::RoutingSelected {
+                    agent_id,
+                    turn_id,
+                    claim_generation,
+                    selection,
+                },
+            ) => {
+                original == selection
+                    && self
+                        .0
+                        .capture
+                        .matches_claim(agent_id.as_str(), turn_id, *claim_generation)
+            }
+            _ => false,
+        }
+    }
+
+    /// Descriptive observations, never an authorization or completeness claim.
+    pub(crate) fn observations(
+        &self,
+    ) -> (
+        &crate::storage::token_usage::budget::receipts::BudgetReceiptSettlement,
+        &crate::storage::token_usage::budget::receipts::BudgetReceiptSettlement,
+    ) {
+        (&self.0.first, &self.0.released)
+    }
+}
+
+impl RuntimeSessionService {
+    /// In-memory validation before adopting delivered content. Expense is
+    /// settled separately even when this original claim is stale. No snapshot
+    /// substitutes for current effect admission or performs actor SQLite I/O.
+    pub(crate) fn budget_provider_settlement_matches(
+        &self,
+        agent: &mez_core::ids::AgentId,
+        turn: &str,
+        generation: u64,
+        settlement: &RuntimeBudgetProviderSettlement,
+    ) -> bool {
+        let (first, released) = settlement.observations();
+        if first.receipt != released.receipt {
+            return false;
+        }
+        self.budget_wait_turn(
+            agent,
+            turn,
+            generation,
+            super::provider_wait::RuntimeBudgetProviderCapture::from(settlement.0.capture.clone()),
+        )
+        .is_ok()
+    }
+}
+
 impl RuntimeBudgetSettledResponse {
+    /// Transfer the actual producer's lifetime into its original result event.
+    /// Private fields prevent wire data or an arbitrary snapshot constructing
+    /// delivery custody; all observations must name this exact terminal ACK.
+    pub(crate) fn into_provider_settlement(
+        self,
+        future: Arc<()>,
+        first: crate::storage::token_usage::budget::receipts::BudgetReceiptSettlement,
+        released: crate::storage::token_usage::budget::receipts::BudgetReceiptSettlement,
+    ) -> Result<RuntimeBudgetProviderSettlement> {
+        use crate::storage::token_usage::budget::receipts::BudgetSettlementState;
+        if !self.future.ptr_eq(&Arc::downgrade(&future))
+            || first.receipt != released.receipt
+            || released.receipt.receipt != self.receipt.0.receipt.id
+            || released.receipt.root != self.receipt.0.receipt.attempt.root
+            || released.state() != BudgetSettlementState::WithinKnownLimits
+        {
+            return Err(MezError::conflict(
+                "original budget completion observation changed",
+            ));
+        }
+        Ok(RuntimeBudgetProviderSettlement(
+            Arc::new(ProviderSettlement {
+                capture: self,
+                _future: future,
+                first,
+                released,
+            }),
+            None,
+        ))
+    }
+
     pub(super) fn matches_owner(&self, owner: &RuntimeBudgetRequestOwner) -> bool {
         self.future.upgrade().is_some()
             && RuntimeBudgetAttemptWork(self.receipt.0.attempt.0.clone()).matches_owner(owner)

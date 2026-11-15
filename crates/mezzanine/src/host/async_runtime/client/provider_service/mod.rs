@@ -2256,6 +2256,33 @@ fn provider_worker_event(
     result: std::result::Result<Result<RuntimeAgentProviderWorkerOutcome>, tokio::task::JoinError>,
 ) -> (RuntimeEvent, bool) {
     match result {
+        Ok(Ok(RuntimeAgentProviderWorkerOutcome::SettledExecution(execution, settlement))) => (
+            RuntimeEvent::AgentProvider(AgentProviderEvent::BudgetSettled {
+                completion: Box::new(AgentProviderEvent::Completed {
+                    agent_id,
+                    turn_id,
+                    claim_generation,
+                    execution,
+                }),
+                settlement,
+            }),
+            true,
+        ),
+        Ok(Ok(RuntimeAgentProviderWorkerOutcome::SettledRoutingSelected(
+            selection,
+            settlement,
+        ))) => (
+            RuntimeEvent::AgentProvider(AgentProviderEvent::BudgetSettled {
+                completion: Box::new(AgentProviderEvent::RoutingSelected {
+                    agent_id,
+                    turn_id,
+                    claim_generation,
+                    selection,
+                }),
+                settlement,
+            }),
+            false,
+        ),
         Ok(Ok(RuntimeAgentProviderWorkerOutcome::Execution(execution))) => (
             RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
                 agent_id,
@@ -2600,22 +2627,31 @@ async fn execute_runtime_agent_provider_dispatch_with_waiter(
             &request,
         )
         .await?;
-        if let Some(source) = &completion_source {
-            source
-                .wait_for_completion(&turn.agent_id, &turn.turn_id, claim_generation)
-                .await?;
-        }
-        return Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
-            super::AgentTurnExecution {
-                request,
-                response,
-                latest_response_usage: Default::default(),
-                routing_token_usage_by_model,
-                action_results: Vec::new(),
-                final_turn: false,
-                terminal_state: AgentTurnState::Running,
-            },
-        )));
+        let settlement = if let Some(source) = &completion_source {
+            Some(
+                source
+                    .wait_for_completion(&turn.agent_id, &turn.turn_id, claim_generation)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let execution = Box::new(super::AgentTurnExecution {
+            request,
+            response,
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model,
+            action_results: Vec::new(),
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        });
+        return Ok(match settlement {
+            Some(settlement) => {
+                let settlement = settlement.bind_execution(&execution)?;
+                RuntimeAgentProviderWorkerOutcome::SettledExecution(execution, settlement)
+            }
+            None => RuntimeAgentProviderWorkerOutcome::Execution(execution),
+        });
     }
     if let Some(auto_sizing) = auto_sizing.as_ref() {
         let router_provider = if let Some(router_provider) = auto_sizing_provider.as_ref() {
@@ -2639,14 +2675,16 @@ async fn execute_runtime_agent_provider_dispatch_with_waiter(
             })?,
         )
         .await?;
-        if let Some(source) = &completion_source {
-            source
+        let selection = Box::new(auto_sizing_execution.into_routing_selection());
+        return Ok(if let Some(source) = &completion_source {
+            let settlement = source
                 .wait_for_completion(&turn.agent_id, &turn.turn_id, claim_generation)
-                .await?;
-        }
-        return Ok(RuntimeAgentProviderWorkerOutcome::RoutingSelected(
-            Box::new(auto_sizing_execution.into_routing_selection()),
-        ));
+                .await?
+                .bind_routing(&selection)?;
+            RuntimeAgentProviderWorkerOutcome::SettledRoutingSelected(selection, settlement)
+        } else {
+            RuntimeAgentProviderWorkerOutcome::RoutingSelected(selection)
+        });
     }
     let permissions = crate::security::permissions::ProductPermissionPlanning::new(
         &permission_policy,
@@ -2692,14 +2730,16 @@ async fn execute_runtime_agent_provider_dispatch_with_waiter(
         }
     };
     execution.routing_token_usage_by_model = routing_token_usage_by_model;
-    if let Some(source) = &completion_source {
-        source
+    let execution = Box::new(execution);
+    Ok(if let Some(source) = &completion_source {
+        let settlement = source
             .wait_for_completion(&turn.agent_id, &turn.turn_id, claim_generation)
-            .await?;
-    }
-    Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
-        execution,
-    )))
+            .await?
+            .bind_execution(&execution)?;
+        RuntimeAgentProviderWorkerOutcome::SettledExecution(execution, settlement)
+    } else {
+        RuntimeAgentProviderWorkerOutcome::Execution(execution)
+    })
 }
 
 /// Executes one model-backed conversation compaction request.

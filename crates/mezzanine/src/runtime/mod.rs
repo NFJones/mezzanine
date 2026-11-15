@@ -230,6 +230,7 @@ pub(crate) use agent::token_budget::admission_work::{
 };
 pub(crate) use agent::token_budget::auxiliary::RuntimeBudgetAuxiliarySource;
 pub(crate) use agent::token_budget::provider_wait::RuntimeBudgetProviderCapture;
+pub use agent::token_budget::request::RuntimeBudgetProviderSettlement;
 #[cfg_attr(
     not(test),
     allow(

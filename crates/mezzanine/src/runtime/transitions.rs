@@ -403,6 +403,15 @@ pub enum AgentProviderEvent {
         /// Request shape and exact response usage observed by the worker.
         observation: Box<crate::integrations::agent::provider::ProviderWireRequestObservation>,
     },
+    /// Original successful result plus sealed descriptive budget settlement.
+    /// Only one Completed or RoutingSelected is allowed inside, never another
+    /// wrapper. This carries original expense/result custody, not permission.
+    BudgetSettled {
+        /// Exact original successful completion event.
+        completion: Box<AgentProviderEvent>,
+        /// Original terminal receipt and observed crossing/release snapshots.
+        settlement: crate::runtime::RuntimeBudgetProviderSettlement,
+    },
     /// Auto-sizing completed and awaits policy-specific runtime application.
     RoutingSelected {
         /// Routed agent identity.

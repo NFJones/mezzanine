@@ -99,7 +99,7 @@ impl BudgetRequestAdmission {
         agent: &str,
         turn: &str,
         generation: u64,
-    ) -> Result<()> {
+    ) -> Result<crate::runtime::RuntimeBudgetProviderSettlement> {
         use crate::storage::token_usage::budget::receipts::BudgetSettlementState;
         let handle = self
             .waiter
@@ -111,6 +111,7 @@ impl BudgetRequestAdmission {
             .completed_receipt()?
             .ok_or_else(|| suspended("original completion retirement unavailable"))?;
         let mut read_refused = false;
+        let mut first_observation = None;
         loop {
             // One strong episode witness, owned only by this producer retaining
             // its execution. A fresh episode after resumed-policy recrossing
@@ -119,10 +120,11 @@ impl BudgetRequestAdmission {
             let capture = receipt
                 .capture_settled_response(Arc::downgrade(&future))
                 .await?;
-            if completion_state(&receipt, &mut read_refused).await
-                == BudgetSettlementState::WithinKnownLimits
-            {
-                return Ok(());
+            if let Some(snapshot) = completion_observation(&receipt, &mut read_refused).await {
+                let first = first_observation.get_or_insert_with(|| snapshot.clone());
+                if snapshot.state() == BudgetSettlementState::WithinKnownLimits {
+                    return capture.into_provider_settlement(future, first.clone(), snapshot);
+                }
             }
             let capture = crate::runtime::RuntimeBudgetProviderCapture::from(capture);
             let mut delay = 100u64;
@@ -156,8 +158,13 @@ impl BudgetRequestAdmission {
                         capture.clone(),
                     )
                     .await?;
-                if completion_state(&receipt, &mut read_refused).await
-                    == BudgetSettlementState::WithinKnownLimits
+                let within = completion_observation(&receipt, &mut read_refused)
+                    .await
+                    .is_some_and(|snapshot| {
+                        first_observation.get_or_insert_with(|| snapshot.clone());
+                        snapshot.state() == BudgetSettlementState::WithinKnownLimits
+                    });
+                if within
                     && handle
                         .reacquire_budget_provider_claim(
                             agent.clone(),
@@ -180,15 +187,14 @@ impl BudgetRequestAdmission {
 /// Read failure remains an operational hold, never numeric exhaustion or an
 /// excuse to discard/replay the response. Only transition-level diagnostics
 /// escape; the original query handle retains its existing cancellation custody.
-async fn completion_state(
+async fn completion_observation(
     receipt: &RuntimeBudgetReceiptWork,
     refused: &mut bool,
-) -> crate::storage::token_usage::budget::receipts::BudgetSettlementState {
-    use crate::storage::token_usage::budget::receipts::BudgetSettlementState;
+) -> Option<crate::storage::token_usage::budget::receipts::BudgetReceiptSettlement> {
     match receipt.commit_owner().observe_settlement().await {
         Ok(Some(snapshot)) => {
             *refused = false;
-            snapshot.state()
+            Some(snapshot)
         }
         result => {
             if !*refused {
@@ -198,7 +204,7 @@ async fn completion_state(
                 );
                 *refused = true;
             }
-            BudgetSettlementState::PolicyUnavailable
+            None
         }
     }
 }

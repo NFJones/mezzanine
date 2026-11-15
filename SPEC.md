@@ -16597,6 +16597,21 @@ adoption followed by fresh observation; it MUST NOT renew active allowance,
 clear human Pause or revive Stop. This completion checkpoint is NOT an atomic
 root-wide effect-admission fence and MUST NOT activate production budgets.
 
+The original successful provider result MAY carry a sealed budget-settlement
+delivery envelope. It MUST retain the exact issued terminal receipt, first
+successful accounting/policy observation and final release observation as
+distinct historical evidence. The original result's lifetime MUST transfer with
+that envelope, not be kept alive by parked metadata alone. Only one Completed
+or RoutingSelected event may be wrapped; nested or failure wrappers MUST refuse
+before content mutation. The sealed custody MUST bind the full immutable
+successful payload, its variant and original subject. A changed pairing MUST
+refuse before consuming payload-derived usage. Actor ingress MUST settle genuine
+original expense before rejecting stale content, and validate the exact current
+claim, native membership
+and result binding without SQLite I/O. Delivery observations MUST NOT be treated
+as current policy or permission to admit effects; root-wide atomic effect
+admission and policy recrossing remain separate contracts.
+
 Telemetry schema16 adds a config-derived budget projection and exact publication
 receipts without replacing lifetime accounts. The primary config MUST remain the
 only authored global policy. An uninitialized, updating or conflicted projection

@@ -34,6 +34,16 @@ async fn budget_completed_response_stop_after_producer_release_refuses_actor_ado
 }
 
 #[tokio::test]
+async fn budget_completed_response_rejects_nested_settlement_without_losing_original() {
+    Box::pin(qualify(CompletionCase::EnvelopeRefusal)).await;
+}
+
+#[tokio::test]
+async fn budget_completed_response_rejects_substituted_payload_and_expense() {
+    Box::pin(qualify(CompletionCase::PayloadRefusal)).await;
+}
+
+#[tokio::test]
 async fn budget_completed_response_human_pause_is_independent_in_both_release_orders() {
     for mode in [CompletionCase::BudgetFirst, CompletionCase::HumanFirst] {
         Box::pin(qualify(mode)).await;
@@ -47,6 +57,8 @@ enum CompletionCase {
     ReadFailure,
     Adopt,
     StopBeforeAdoption,
+    EnvelopeRefusal,
+    PayloadRefusal,
     BudgetFirst,
     HumanFirst,
     MonitorError,
@@ -64,6 +76,8 @@ async fn qualify(mode: CompletionCase) {
         mode,
         CompletionCase::Adopt
             | CompletionCase::StopBeforeAdoption
+            | CompletionCase::EnvelopeRefusal
+            | CompletionCase::PayloadRefusal
             | CompletionCase::BudgetFirst
             | CompletionCase::HumanFirst
             | CompletionCase::MonitorError
@@ -252,13 +266,78 @@ async fn qualify(mode: CompletionCase) {
             let event = event
                 .map_err(|error| error.to_string())?.map_err(|error| error.to_string())?;
             let published = match &event {
-                Some((RuntimeEvent::AgentProvider(AgentProviderEvent::Completed { execution, .. }), _)) => {
-                    execution.response.action_batch.is_some() && execution.response.raw_text.contains("retained-native-candidate")
+                Some((RuntimeEvent::AgentProvider(AgentProviderEvent::BudgetSettled { completion, settlement }), _)) => {
+                    use crate::storage::token_usage::budget::receipts::BudgetSettlementState;
+                    let (first, released) = settlement.observations();
+                    if first.state() != (BudgetSettlementState::Exhausted { input: true, output: true })
+                        || released.state() != BudgetSettlementState::WithinKnownLimits
+                        || first.receipt != released.receipt
+                        || released.known.input != 11 || released.known.output != 3
+                        || released.revisions.projection <= first.revisions.projection {
+                        return Err("original crossing/release observation was not delivered".to_owned());
+                    }
+                    matches!(completion.as_ref(), AgentProviderEvent::Completed { execution, .. }
+                        if execution.response.action_batch.is_some() && execution.response.raw_text.contains("retained-native-candidate"))
                 }
                 _ => false,
             };
             if adopt {
                 let (event, _) = event.ok_or_else(|| "original completion missing at adoption".to_owned())?;
+                if mode == CompletionCase::PayloadRefusal {
+                    for change in 0..4 {
+                        let mut substituted = event.clone();
+                        let RuntimeEvent::AgentProvider(AgentProviderEvent::BudgetSettled { completion, .. }) = &mut substituted else { unreachable!() };
+                        let AgentProviderEvent::Completed { agent_id, turn_id, claim_generation, execution } = completion.as_mut() else { unreachable!() };
+                        match change {
+                            0 => execution.response.raw_text.push_str(" substituted"),
+                            1 => execution.response.usage.output_tokens += 1000,
+                            2 => *claim_generation += 1,
+                            _ => {
+                                let replacement = AgentProviderEvent::RoutingSelected {
+                                    agent_id: agent_id.clone(), turn_id: turn_id.clone(), claim_generation: *claim_generation,
+                                    selection: Box::new(mez_agent::AutoSizingRoutingSelection {
+                                        selected_profile: mez_agent::ModelProfile {
+                                            provider: execution.request.provider.clone(), model: execution.request.model.clone(),
+                                            ..Default::default()
+                                        },
+                                        selected_profile_name: "substituted".into(), routing_token_usage_by_model: Default::default(),
+                                        decision_summary: None, fallback: None,
+                                    }),
+                                };
+                                **completion = replacement;
+                            }
+                        }
+                        let mut invalid = RuntimeEventBatch::new();
+                        invalid.push(substituted);
+                        if handle.submit_runtime_events(invalid).await.is_ok() {
+                            return Err("same-generation substituted settlement was accepted".to_owned());
+                        }
+                    }
+                    if handle.drain_runtime_side_effects(256).await.unwrap().iter().any(|effect| matches!(effect,
+                        crate::runtime::RuntimeSideEffect::DispatchNativeShellAction { turn_id, .. } if turn_id == &turn)) {
+                        return Err("substituted settlement offered a native effect".to_owned());
+                    }
+                }
+                if mode == CompletionCase::EnvelopeRefusal {
+                    let RuntimeEvent::AgentProvider(AgentProviderEvent::BudgetSettled { settlement, .. }) = &event else {
+                        return Err("original settlement envelope unavailable".to_owned());
+                    };
+                    // A real envelope is not authority to wrap another envelope.
+                    // Rejection must precede mutation and leave the original
+                    // claim able to adopt its exact result once afterward.
+                    let mut malformed = RuntimeEventBatch::new();
+                    let RuntimeEvent::AgentProvider(original) = event.clone() else { unreachable!() };
+                    malformed.push(RuntimeEvent::AgentProvider(AgentProviderEvent::BudgetSettled {
+                        completion: Box::new(original), settlement: settlement.clone(),
+                    }));
+                    if handle.submit_runtime_events(malformed).await.is_ok() {
+                        return Err("nested settlement was accepted".to_owned());
+                    }
+                    let premature = handle.drain_runtime_side_effects(256).await.unwrap();
+                    if premature.iter().any(|effect| matches!(effect, crate::runtime::RuntimeSideEffect::DispatchNativeShellAction { turn_id, .. } if turn_id == &turn)) {
+                        return Err("rejected settlement offered a native effect".to_owned());
+                    }
+                }
                 if mode == CompletionCase::StopBeforeAdoption {
                     handle.execute_agent_shell_command(primary.clone(), "/stop".into()).await.unwrap();
                 }

@@ -511,7 +511,7 @@ async fn qualify_case(
                         .ok_or_else(|| "original completion missing".to_owned())?;
                     if index == 0 {
                         let successful = match contender {
-                            Contender::Ordinary => matches!(completion.0, RuntimeEvent::AgentProvider(AgentProviderEvent::Completed { .. })),
+                            Contender::Ordinary => matches!(&completion.0, RuntimeEvent::AgentProvider(AgentProviderEvent::BudgetSettled { completion, .. }) if matches!(completion.as_ref(), AgentProviderEvent::Completed { .. })),
                             Contender::Compaction => matches!(completion.0, RuntimeEvent::AgentCompaction(AgentCompactionEvent::Completed { .. })),
                             Contender::Memory => true,
                         };

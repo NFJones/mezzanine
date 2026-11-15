@@ -405,6 +405,16 @@ pub enum RuntimeAgentProviderWorkerOutcome {
     Execution(Box<AgentTurnExecution>),
     /// A routing decision ready for policy-specific application by the runtime actor.
     RoutingSelected(Box<AutoSizingRoutingSelection>),
+    /// Original execution with descriptive terminal-receipt delivery custody.
+    SettledExecution(
+        Box<AgentTurnExecution>,
+        crate::runtime::RuntimeBudgetProviderSettlement,
+    ),
+    /// Original routing result with the same non-authorizing delivery contract.
+    SettledRoutingSelected(
+        Box<AutoSizingRoutingSelection>,
+        crate::runtime::RuntimeBudgetProviderSettlement,
+    ),
 }
 
 /// Captured actor-owned identity for one persistence settlement generation.

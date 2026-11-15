@@ -95,6 +95,16 @@ retry those calls.
 
 ### Staged session-budget accounting
 
+Successful monitored budget completions now carry the original terminal receipt
+and two distinct historical observations: the first successful policy/accounting
+read and the final release read. The exact result-delivery envelope retains its
+original lifetime through actor ingress. The actor checks that sealed binding
+and full immutable result/variant before consuming its usage, without database
+I/O, and preserves genuine original expense settlement before stale-content
+rejection. Nested settlement envelopes are invalid. These snapshots are not
+current-policy or executable-effect permission, and this does not activate
+budgets or provide the separate root-wide atomic effect-admission fence.
+
 The native budget integration retains one original descriptor per concrete
 exchange, including DeepSeek's internal structured-output retry. Its next
 descriptor is allocated only after the previous usage receipt commits and the
