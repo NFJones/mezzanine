@@ -140,13 +140,15 @@ async fn qualify(stop: bool, read_failure: bool) {
             super::remember_retirement::publish_policy(&store, "completion-release", 'd', BudgetLimits::default()).await;
             if let Some((id, body)) = original {
                 let early = tokio::time::timeout(Duration::from_millis(2300), &mut worker).await;
+                // A ready JoinHandle has already been consumed, even if the
+                // following exact restoration fails and cleanup unwinds.
+                joined |= early.is_ok();
                 // Restore this fixture's exact before-image even if the
                 // regression returned an early error/completion.
                 rusqlite::Connection::open(store.path()).unwrap().execute(
                     "UPDATE budget_receipts SET body=?1 WHERE id=?2", [&body, &id],
                 ).unwrap();
                 if early.is_ok() {
-                    joined = true;
                     return Err("read refusal discarded or published original response".to_owned());
                 }
             }
