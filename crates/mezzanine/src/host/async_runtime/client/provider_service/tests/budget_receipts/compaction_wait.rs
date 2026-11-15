@@ -23,6 +23,49 @@ async fn budget_compaction_human_pause_remains_orthogonal_in_both_release_orders
     Box::pin(qualify(false, Some(false))).await;
 }
 
+/// Shared by wait and competition owners; the caller retains the exact root.
+/// Only competition opts into generated titles. Existing wait config is intact.
+pub(super) fn queue_original_wave(
+    service: &mut RuntimeSessionService,
+    primary: &mez_core::ids::ClientId,
+    generated_title: bool,
+) -> u64 {
+    let title_policy = if generated_title {
+        "session_title_policy=\"generated\"\n"
+    } else {
+        ""
+    };
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "compaction-original-wait".into(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: format!("[agents]\nrouting=false\n{title_policy}shell_mode=\"native\"\ndefault_provider=\"local-chat\"\ndefault_model_profile=\"default\"\n[permissions]\nsandbox=\"policy-only\"\n[providers.local-chat]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:1/v1\"\nmodels=[\"test-model\"]\ndefault_model=\"test-model\"\n[model_profiles.default]\nprovider=\"local-chat\"\nmodel=\"test-model\"\ncontext_window_tokens=40000\n"),
+    }]).unwrap();
+    let turn = crate::test_support::compaction_source::complete_task_and_admit_successor(
+        service,
+        primary,
+        &format!("original source {}", "evidence ".repeat(6_000)),
+        "completed evidence",
+        "continue original",
+        mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+    );
+    let error = MezError::invalid_state("provider context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+        );
+    service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            &turn,
+            ProviderErrorRetryClass::ContextLimit,
+            &error,
+        )
+        .unwrap()
+        .unwrap();
+    service
+        .pending_agent_compaction_task_generation("%1")
+        .unwrap()
+}
+
 async fn qualify(stop: bool, budget_first: Option<bool>) {
     let Prepared {
         mut service,
@@ -54,35 +97,7 @@ async fn qualify(stop: bool, budget_first: Option<bool>) {
             .unwrap();
     }
     service.set_config_root(store.path().parent().unwrap().to_owned());
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "compaction-original-wait".into(), path: None,
-        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\nrouting=false\nshell_mode=\"native\"\ndefault_provider=\"local-chat\"\ndefault_model_profile=\"default\"\n[permissions]\nsandbox=\"policy-only\"\n[providers.local-chat]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:1/v1\"\nmodels=[\"test-model\"]\ndefault_model=\"test-model\"\n[model_profiles.default]\nprovider=\"local-chat\"\nmodel=\"test-model\"\ncontext_window_tokens=40000\n".into(),
-    }]).unwrap();
-    let turn = crate::test_support::compaction_source::complete_task_and_admit_successor(
-        &mut service,
-        &primary,
-        &format!("original source {}", "evidence ".repeat(6_000)),
-        "completed evidence",
-        "continue original",
-        mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
-    );
-    let error = MezError::invalid_state("provider context length exceeded")
-        .with_provider_failure_json(
-            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
-        );
-    service
-        .schedule_agent_provider_retry_transition(
-            &AgentId::opaque("agent-%1").unwrap(),
-            &turn,
-            ProviderErrorRetryClass::ContextLimit,
-            &error,
-        )
-        .unwrap()
-        .unwrap();
-    let generation = service
-        .pending_agent_compaction_task_generation("%1")
-        .unwrap();
+    let generation = queue_original_wave(&mut service, &primary, false);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let sends = Arc::new(AtomicUsize::new(0));
