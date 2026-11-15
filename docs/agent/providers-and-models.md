@@ -302,6 +302,12 @@ retains the original native read handle, while a later explicit read can refresh
 the snapshot. This port does not validate a live task, free exposure or authorize
 response publication/effects, and is not yet connected to completion gating.
 
+The native request source retains at most one original issued terminal-receipt
+descriptor, only after its durable retirement checkpoint. A newer exchange clears
+it; replaying an older checkpoint cannot restore it. Prefixes, zero-send refusals
+and unused permits do not qualify output. This request-local handoff is not an
+additional ledger or permission to publish a response or execute its actions.
+
 These internal allocation and accounting ports do **not** yet enable operational
 session budgets. Production assembly, fair waiting, complete terminal coverage,
 physical retirement, root-wide activity inhibition, policy controls, and their

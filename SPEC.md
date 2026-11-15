@@ -16576,6 +16576,14 @@ current continuation permission or effect admission. Those owners MUST revalidat
 their own boundaries; the observation port alone MUST NOT claim response gating
 or activate production budgets. No persisted receipt format changes are implied.
 
+The native request source MAY retain one exact issued terminal-receipt descriptor
+after its original durable retirement checkpoint. Planning a newer exchange MUST
+invalidate that request-local descriptor; a late older checkpoint MUST NOT restore
+it. Checked request-local ordering is not native authorization. Prefix receipts,
+never-issued refusals and unused-permit retirement MUST NOT qualify response
+publication. This bounded handoff is descriptive custody, not a second ledger,
+live-claim proof, executable response gate or production activation.
+
 Telemetry schema16 adds a config-derived budget projection and exact publication
 receipts without replacing lifetime accounts. The primary config MUST remain the
 only authored global policy. An uninitialized, updating or conflicted projection

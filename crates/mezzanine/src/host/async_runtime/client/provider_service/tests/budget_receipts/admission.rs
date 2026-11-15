@@ -4,9 +4,34 @@
 
 use super::*;
 use crate::host::async_runtime::client::provider_service::budget_admission::BudgetAttemptAdmission;
+use crate::host::async_runtime::client::provider_service::budget_admission::BudgetRequestAdmission;
 use crate::integrations::agent::provider::OpenAiResponsesProvider;
+use crate::integrations::agent::provider::{
+    ProviderObservationReceiptFactory, ProviderObservationReceiptSource,
+};
 use futures_util::FutureExt;
 use mez_agent::token_budget::TokenLimit;
+
+/// Retain the original factory for an explicit late checkpoint, without
+/// replacing production allocation or receipt/native authorization behavior.
+struct CapturedRequestSource {
+    inner: Arc<BudgetRequestAdmission>,
+    first: std::sync::Mutex<Option<Arc<dyn ProviderObservationReceiptFactory>>>,
+}
+
+impl ProviderObservationReceiptSource for CapturedRequestSource {
+    fn for_exchange(
+        &self,
+        observation: &ProviderWireRequestObservation,
+    ) -> Result<Arc<dyn ProviderObservationReceiptFactory>> {
+        let factory = self.inner.for_exchange(observation)?;
+        let mut first = self.first.lock().unwrap();
+        if first.is_none() {
+            *first = Some(factory.clone());
+        }
+        Ok(factory)
+    }
+}
 
 struct GateTransport {
     pending: PendingProviderWireObservations,
@@ -108,7 +133,7 @@ impl AsyncProviderHttpTransport for GateTransport {
     }
 }
 
-async fn boundary(responses: bool, stream: bool, held: bool) {
+async fn boundary(responses: bool, stream: bool, held: bool, request_scoped: bool) {
     let limits = BudgetLimits {
         input: if held {
             TokenLimit::limited(0).unwrap()
@@ -181,12 +206,23 @@ async fn boundary(responses: bool, stream: bool, held: bool) {
         )
         .unwrap();
     let factory = Arc::new(BudgetAttemptAdmission::new(work.clone()));
+    let source = Arc::new(BudgetRequestAdmission::new(
+        dispatch.budget_owner.as_ref().unwrap().clone(),
+    ));
+    let captured = Arc::new(CapturedRequestSource {
+        inner: source.clone(),
+        first: Default::default(),
+    });
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
     let observer = ProviderWireRequestObserver::new(&member.conversation, "%1", sender)
         .with_claim_generation(7)
-        .with_pending_observations(pending.clone())
-        .with_budget_receipts(factory.clone())
-        .unwrap();
+        .with_pending_observations(pending.clone());
+    let observer = if request_scoped {
+        observer.with_budget_receipt_source(captured.clone())
+    } else {
+        observer.with_budget_receipts(factory.clone())
+    }
+    .unwrap();
     let chat_observed = chat.as_ref().map(|provider| {
         ObservedAsyncModelProvider::new(provider, &observer, ProviderRequestPurpose::Execution)
     });
@@ -234,6 +270,7 @@ async fn boundary(responses: bool, stream: bool, held: bool) {
             }
             assert!(pending.is_empty());
             assert_eq!(rows(&store, "budget_receipts"), 0);
+            assert!(source.completed_receipt().unwrap().is_none());
         } else {
             let observation = tokio::select! {
                 biased;
@@ -242,6 +279,10 @@ async fn boundary(responses: bool, stream: bool, held: bool) {
             };
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             assert_eq!(rows(&store, "budget_receipts"), 0);
+            assert!(
+                source.completed_receipt().unwrap().is_none(),
+                "uncommitted output acquired a completion receipt"
+            );
             submit_pending_provider_observation(&handle, &pending, observation.clone())
                 .await
                 .unwrap();
@@ -254,8 +295,15 @@ async fn boundary(responses: bool, stream: bool, held: bool) {
                 }
             );
             assert_eq!(rows(&store, "budget_receipts"), 2);
-            let (_, retirement) = factory.receipt_stages_for_test(&observation);
-            let settled = retirement.unwrap().commit_owner();
+            let retirement = if request_scoped {
+                source
+                    .completed_receipt()
+                    .unwrap()
+                    .expect("durable original terminal receipt missing")
+            } else {
+                factory.receipt_stages_for_test(&observation).1.unwrap()
+            };
+            let settled = retirement.commit_owner();
             let before = settled.observe_settlement().await.unwrap().unwrap();
             assert_eq!(
                 before.known,
@@ -294,7 +342,29 @@ async fn boundary(responses: bool, stream: bool, held: bool) {
             let next = Arc::new(BudgetAttemptAdmission::new(work.clone()));
             let mut changed = observation.clone();
             changed.request_id.push_str("-next");
-            assert!(next.plan(&changed).is_err());
+            if request_scoped {
+                let original = captured.first.lock().unwrap().as_ref().unwrap().clone();
+                assert!(original.plan(&changed).is_err());
+                // A new allocation is not a send. A late original checkpoint
+                // may settle its expense, but cannot qualify the newer output.
+                let newer = source.for_exchange(&changed).unwrap();
+                assert!(source.completed_receipt().unwrap().is_none());
+                original
+                    .freeze(&observation)
+                    .unwrap()
+                    .checkpoint()
+                    .await
+                    .unwrap();
+                assert!(
+                    source.completed_receipt().unwrap().is_none(),
+                    "late old checkpoint replaced newer request custody"
+                );
+                assert_eq!(rows(&store, "budget_receipts"), 2);
+                assert_eq!(rows(&store, "budget_admissions"), 1);
+                drop(newer);
+            } else {
+                assert!(next.plan(&changed).is_err());
+            }
             assert_eq!(calls.load(Ordering::SeqCst), 1);
         }
     };
@@ -313,6 +383,8 @@ async fn boundary(responses: bool, stream: bool, held: bool) {
         exit,
         observer,
         factory,
+        source,
+        captured,
         work,
         dispatch,
         chat,
@@ -329,7 +401,9 @@ async fn boundary(responses: bool, stream: bool, held: bool) {
 async fn budget_wire_actual_admission_controls_chat_and_responses_physical_polls() {
     for (responses, stream) in [(false, false), (true, false), (true, true)] {
         for held in [false, true] {
-            boundary(responses, stream, held).await;
+            for request_scoped in [false, true] {
+                boundary(responses, stream, held, request_scoped).await;
+            }
         }
     }
 }

@@ -29,6 +29,33 @@ pub(super) struct BudgetRequestAdmission {
     owner: RuntimeBudgetRequestOwner,
     waiter: Option<AsyncRuntimeSessionHandle>,
     deadline: Option<crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline>,
+    completion: Arc<Mutex<RequestCompletion>>,
+}
+
+/// At most one original terminal descriptor, not another observation ledger.
+/// Planning a newer exchange clears it; late old checkpoints cannot restore it.
+#[derive(Default)]
+struct RequestCompletion {
+    sequence: u64,
+    receipt: Option<RuntimeBudgetReceiptWork>,
+}
+
+struct CompletionSlot {
+    owner: Arc<Mutex<RequestCompletion>>,
+    sequence: u64,
+}
+
+impl CompletionSlot {
+    fn publish(&self, receipt: RuntimeBudgetReceiptWork) -> Result<()> {
+        let mut owner = self
+            .owner
+            .lock()
+            .map_err(|_| suspended("budget completion custody unavailable"))?;
+        if owner.sequence == self.sequence {
+            owner.receipt = Some(receipt);
+        }
+        Ok(())
+    }
 }
 
 impl BudgetRequestAdmission {
@@ -37,7 +64,25 @@ impl BudgetRequestAdmission {
             owner,
             waiter: None,
             deadline: None,
+            completion: Default::default(),
         }
+    }
+
+    /// Pure access to the exact latest issued retirement descriptor, available
+    /// only after its durable checkpoint. This does not validate live claims,
+    /// current policy, response publication or effect authority. None includes
+    /// no exchange, an unsettled newer exchange and a never-issued refusal.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "completion gate assembly remains staged")
+    )]
+    pub(super) fn completed_receipt(&self) -> Result<Option<RuntimeBudgetReceiptWork>> {
+        Ok(self
+            .completion
+            .lock()
+            .map_err(|_| suspended("budget completion custody unavailable"))?
+            .receipt
+            .clone())
     }
 
     pub(super) fn with_waiter(
@@ -74,10 +119,26 @@ impl ProviderObservationReceiptSource for BudgetRequestAdmission {
             mez_agent::ModelTokenUsageKey::new(&observation.provider, &observation.model),
             purpose,
         )?;
+        let sequence = {
+            let mut completion = self
+                .completion
+                .lock()
+                .map_err(|_| suspended("budget completion custody unavailable"))?;
+            completion.sequence = completion
+                .sequence
+                .checked_add(1)
+                .ok_or_else(|| suspended("budget request sequence exhausted"))?;
+            completion.receipt = None;
+            completion.sequence
+        };
         Ok(Arc::new(BudgetAttemptAdmission::retaining(
             work,
             self.waiter.clone(),
             self.deadline.clone(),
+            Some(CompletionSlot {
+                owner: self.completion.clone(),
+                sequence,
+            }),
         )))
     }
 }
@@ -113,6 +174,7 @@ struct Source {
     phase: Mutex<Phase>,
     waiter: Option<AsyncRuntimeSessionHandle>,
     deadline: Option<crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline>,
+    completion: Option<CompletionSlot>,
 }
 
 fn reconsider_changed_hold(
@@ -266,7 +328,7 @@ pub(super) struct BudgetAttemptAdmission(Arc<Source>);
 impl BudgetAttemptAdmission {
     #[cfg(test)]
     pub(super) fn new(work: RuntimeBudgetAttemptWork) -> Self {
-        Self::retaining(work, None, None)
+        Self::retaining(work, None, None, None)
     }
 
     fn retaining(
@@ -275,12 +337,14 @@ impl BudgetAttemptAdmission {
         deadline: Option<
             crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline,
         >,
+        completion: Option<CompletionSlot>,
     ) -> Self {
         Self(Arc::new(Source {
             work,
             phase: Mutex::new(Phase::default()),
             waiter,
             deadline,
+            completion,
         }))
     }
 
@@ -573,7 +637,21 @@ impl ProviderObservationReceipt for Receipt {
                 }
             };
             if let Some(work) = retirement {
-                checkpoint_work(work).await?;
+                checkpoint_work(work.clone()).await?;
+                // An unused permit receipt never qualifies provider output.
+                // The exact issued descriptor is published synchronously after
+                // commit/reconciliation, with no intervening cancellation gap.
+                if let Some(completion) = &self.source.completion
+                    && self
+                        .source
+                        .phase
+                        .lock()
+                        .map_err(|_| suspended("budget attempt custody unavailable"))?
+                        .issued
+                        .is_some()
+                {
+                    completion.publish(work)?;
+                }
             }
             Ok(())
         })
