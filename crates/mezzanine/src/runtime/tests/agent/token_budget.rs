@@ -13,6 +13,7 @@ mod reclamation;
 mod remember_wait;
 mod request;
 mod resolution;
+mod title_capacity;
 mod transitions;
 
 struct Scene {

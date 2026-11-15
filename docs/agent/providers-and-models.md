@@ -198,6 +198,13 @@ from the title lease; duplicate park/resume cannot extend it twice. Human Pause
 stays independent, and closing/replacing the original claim cannot authorize a
 send after policy release. Actor adoption restores the remaining lease before
 fresh native authorization, never supplies that authorization itself.
+That exact live non-resumed hold also releases optional-title execution capacity.
+Pending and resumed titles still reserve the existing two active slots; original
+queued/parked custody is separately bounded at 256. Once policy progress permits
+reacquisition, claim-local monotonic readiness order prevents a newer polling
+waiter or a new optional title from overtaking an older eligible original.
+Paused, retired, dead or revoked waiters do not block eligible titles. This is
+title-lane fairness, not a claim of cross-family/root-wide inference fairness.
 The final atomic claim check follows native binding validation immediately
 before permit consumption. Retirement wins if it precedes that check, including
 when authorization finishes after actor resume; the unused original grant is
@@ -208,9 +215,11 @@ Human `/stop` also retires the invoking conversation's queued or claimed title,
 including a parked title without a live ordinary turn. Original expense custody
 remains available for late settlement; a later policy release cannot revive it.
 
-The title connection still retains the existing optional-title concurrency
-slot. Neither title nor memory parking implements auxiliary fair requeue,
-compaction waits, root-wide effect gates, or production membership activation.
+Title parking now releases its optional-title execution slot and orders original
+title reacquisition as described above. Cross-family/root-wide inference fairness,
+memory capacity release/fair requeue, root-wide effect gates, and production
+membership activation remain unfinished; compaction's retained-wave lease
+suspension is separate from those remaining contracts.
 
 Native async sends also retain evidence that their exact local transport future
 and active callback futures were destroyed, including on cancellation. This transfer

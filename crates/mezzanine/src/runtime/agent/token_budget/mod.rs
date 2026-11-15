@@ -129,6 +129,8 @@ pub(crate) struct RuntimeBudgetMemberships {
     enabled: bool,
     entries: BTreeMap<String, Entry>,
     provider_waits: BTreeMap<String, provider_wait::ProviderWait>,
+    /// Ordering only; actual ready title custody stays in its original claim.
+    next_title_ready_order: u64,
     #[cfg(test)]
     fail_restore_after_install: bool,
 }

@@ -37,6 +37,10 @@ use super::{
 /// agent concurrency limit and never competes with turn machinery.
 pub(crate) const MAX_CONCURRENT_SESSION_TITLE_TASKS: usize = 2;
 
+/// Bounds original queued/parked title custody independently of active slots.
+/// Releasing a positive budget hold must not create unbounded retained workers.
+pub(crate) const MAX_RETAINED_SESSION_TITLE_TASKS: usize = 256;
+
 /// Maximum provider attempts for one conversation title, so one retry is allowed.
 pub(crate) const SESSION_TITLE_MAX_ATTEMPTS: u32 = 2;
 
@@ -712,7 +716,14 @@ impl RuntimeSessionService {
             prompt_ordinal: state.map_or(0, |state| state.prompt_ordinal),
             generated_at_prompt_ordinal: state.map_or(0, |state| state.generated_at_prompt_ordinal),
             state,
-            in_flight: self.agent.session_title_tasks.in_flight(),
+            in_flight: if self.agent.session_title_tasks.in_flight()
+                >= MAX_RETAINED_SESSION_TITLE_TASKS
+                || self.oldest_ready_budget_title().is_some()
+            {
+                MAX_CONCURRENT_SESSION_TITLE_TASKS
+            } else {
+                self.budget_title_active_capacity()
+            },
         })
         .err()
     }

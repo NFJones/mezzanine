@@ -16828,9 +16828,16 @@ admission MUST check the original claim-local retirement fence without I/O or
 await before permit consumption. Retirement before that point MUST retain the
 unconsumed original grant for withdrawal and terminal settlement, with no send.
 An admission ordered before retirement remains issued exposure, not rollback.
-This title-only connection retains the existing
-optional-title slot; it does not establish fair auxiliary requeue or activate
-production budgets.
+Only a current positive non-resumed title hold with a live original future MAY
+release optional-title execution capacity. Pending and resumed titles MUST
+retain the unchanged two-title active cap. The original claim retains its wait
+and expense custody; total queued/parked title custody MUST remain bounded at
+256. A ready original waiter MUST receive a monotonic claim-local readiness
+order, with older eligible waiters preceding newer resume calls and optional
+new title admission. Human-paused, retired, dead or revoked waiters MUST NOT
+block an eligible title. Duplicate resume MUST NOT reserve capacity twice.
+These title-specific rules do not establish cross-family/root-wide inference
+fairness or activate production budgets.
 Human `/stop` MUST retire queued and claimed generated-title publication for the
 invoking conversation even when no ordinary turn is live. Original late-expense
 custody MUST survive; lifting budget policy MUST NOT revive that stopped title.

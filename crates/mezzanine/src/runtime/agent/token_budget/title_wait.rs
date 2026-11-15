@@ -16,9 +16,43 @@ pub(crate) struct TitleWait {
     waiter: std::sync::Weak<()>,
     started_at_ms: u64,
     resumed: bool,
+    ready_order: Option<u64>,
 }
 
 impl RuntimeSessionService {
+    /// Pending and active titles reserve slots. Only an exact live nonwriting
+    /// hold releases execution capacity, not its original task/expense custody.
+    pub(in crate::runtime::agent) fn budget_title_active_capacity(&self) -> usize {
+        let parked = self
+            .agent
+            .claimed_agent_session_title_tasks
+            .keys()
+            .filter(|conversation| self.budget_title_claim_is_quiescent(conversation))
+            .count();
+        self.agent
+            .session_title_tasks
+            .in_flight()
+            .saturating_sub(parked)
+    }
+
+    /// Readiness is requested only after the original future observes policy
+    /// progress. Paused, retired and revoked waiters cannot block healthy work.
+    pub(in crate::runtime::agent) fn oldest_ready_budget_title(&self) -> Option<&str> {
+        self.agent
+            .claimed_agent_session_title_tasks
+            .iter()
+            .filter_map(|(conversation, claim)| {
+                let wait = claim.budget_wait.as_ref()?;
+                let order = wait.ready_order?;
+                (!wait.resumed
+                    && !self.agent_is_human_paused(&claim.task.pane_id)
+                    && self.budget_title_claim_is_quiescent(conversation))
+                .then_some((order, conversation.as_str()))
+            })
+            .min_by_key(|(order, _)| *order)
+            .map(|(_, conversation)| conversation)
+    }
+
     /// Revoke before removing publication custody. Existing cloned lease views
     /// and late accounting owners cannot keep the old send boundary open.
     pub(in crate::runtime::agent) fn take_agent_session_title_claim(
@@ -116,6 +150,7 @@ impl RuntimeSessionService {
             waiter,
             started_at_ms: now_ms,
             resumed: false,
+            ready_order: None,
         });
         Ok(true)
     }
@@ -129,6 +164,39 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         let (conversation, pane) = self.budget_title_subject(capture)?;
         if self.agent_is_human_paused(&pane) {
+            return Ok(false);
+        }
+        let wait = self
+            .agent
+            .claimed_agent_session_title_tasks
+            .get(&conversation)
+            .and_then(|claim| claim.budget_wait.as_ref())
+            .filter(|wait| wait.capture.same_capture(capture) && wait.waiter.upgrade().is_some())
+            .ok_or_else(|| MezError::conflict("original title wait unavailable"))?;
+        if wait.resumed {
+            return Ok(true);
+        }
+        if wait.ready_order.is_none() {
+            let next = self
+                .agent
+                .budget_memberships
+                .next_title_ready_order
+                .checked_add(1)
+                .ok_or_else(|| MezError::invalid_state("title readiness order exhausted"))?;
+            self.agent.budget_memberships.next_title_ready_order = next;
+            if let Some(wait) = self
+                .agent
+                .claimed_agent_session_title_tasks
+                .get_mut(&conversation)
+                .and_then(|claim| claim.budget_wait.as_mut())
+            {
+                wait.ready_order = Some(next);
+            }
+        }
+        if self.budget_title_active_capacity()
+            >= super::super::session_titles::MAX_CONCURRENT_SESSION_TITLE_TASKS
+            || self.oldest_ready_budget_title() != Some(conversation.as_str())
+        {
             return Ok(false);
         }
         let claim = self
