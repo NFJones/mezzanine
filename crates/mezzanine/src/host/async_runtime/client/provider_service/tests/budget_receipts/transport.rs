@@ -207,6 +207,8 @@ async fn budget_wire_loopback_transport_destroys_actively_blocked_sse_callback()
 
 /// The original real-HTTP request stays at its actor ACK barrier while exact
 /// terminal bookkeeping fails, loses its result, or outlives a canceled waiter.
+/// A queued lane writer must remain blocked even after explicit storage-only
+/// recovery, until the original receipt checkpoint adopts terminal evidence.
 #[tokio::test]
 async fn budget_wire_loopback_retirement_writer_faults_keep_original_custody() {
     for fault in 1..=3 {
@@ -958,8 +960,13 @@ async fn qualify_dialect_usage(
             BudgetAttemptPurpose::Execution,
         )
         .unwrap();
+    let lane = Arc::new(tokio::sync::RwLock::new(()));
     let factory = Arc::new(Factory {
-        native: BudgetAttemptAdmission::new(work),
+        native: if fault == 0 {
+            BudgetAttemptAdmission::new(work)
+        } else {
+            BudgetAttemptAdmission::with_lane_for_test(work, lane.clone())
+        },
         dropped: dropped.clone(),
         retired: AtomicUsize::new(0),
         callback_dropped: blocked_callback.then(|| callback_dropped.clone()),
@@ -1050,10 +1057,15 @@ async fn qualify_dialect_usage(
                 drop(call);
                 return;
             }
+            let mut lane_waiter = Box::pin(lane.clone().write_owned());
             if fault != 0 {
                 let (prefix, terminal) = factory.stages.get().unwrap();
                 prefix.commit_owner().commit().await.unwrap();
                 assert_eq!(rows(&store, "budget_receipts"), 1);
+                assert!(
+                    futures_util::poll!(&mut lane_waiter).is_pending(),
+                    "subtotal ACK released the original reader"
+                );
                 let terminal = terminal.as_ref().unwrap();
                 let owner = terminal.commit_owner();
                 match fault {
@@ -1062,6 +1074,10 @@ async fn qualify_dialect_usage(
                         db.execute_batch("CREATE TRIGGER refuse_retirement BEFORE UPDATE OF retired_receipt ON budget_admissions BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
                         assert!(pending.checkpoint(&observation).await.is_err());
                         assert_eq!(rows(&store, "budget_receipts"), 1);
+                        assert!(
+                            futures_util::poll!(&mut lane_waiter).is_pending(),
+                            "failed terminal transaction released the original reader"
+                        );
                         assert_eq!(db.query_row("SELECT COUNT(*) FROM budget_admissions WHERE retired_receipt IS NULL", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
                         db.execute_batch("DROP TRIGGER refuse_retirement;").unwrap();
                         assert!(
@@ -1118,10 +1134,20 @@ async fn qualify_dialect_usage(
                 assert!(futures_util::poll!(&mut call).is_pending());
                 assert_eq!(factory.retired.load(Ordering::SeqCst), 1);
                 assert_eq!(pending.len(), 1);
+                assert!(
+                    futures_util::poll!(&mut lane_waiter).is_pending(),
+                    "storage recovery alone bypassed original receipt adoption"
+                );
             }
             submit_pending_provider_observation(&handle, &pending, observation)
                 .await
                 .unwrap();
+            if fault != 0 {
+                let writer = tokio::time::timeout(Duration::from_secs(5), &mut lane_waiter)
+                    .await
+                    .expect("terminal checkpoint did not release the original lane");
+                drop(writer);
+            }
             let result = call.await;
             if matches!(
                 usage_case,

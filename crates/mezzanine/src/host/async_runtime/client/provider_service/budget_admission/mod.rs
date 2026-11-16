@@ -474,6 +474,16 @@ impl BudgetAttemptAdmission {
         Self::retaining(work, None, None, None, None)
     }
 
+    /// Install the production lane guard in a real adapter/receipt fixture.
+    /// This supplies no native permission or synthetic retirement evidence.
+    #[cfg(test)]
+    pub(super) fn with_lane_for_test(
+        work: RuntimeBudgetAttemptWork,
+        lane: Arc<tokio::sync::RwLock<()>>,
+    ) -> Self {
+        Self::retaining(work, None, None, None, Some(lane))
+    }
+
     fn retaining(
         work: RuntimeBudgetAttemptWork,
         waiter: Option<AsyncRuntimeSessionHandle>,
