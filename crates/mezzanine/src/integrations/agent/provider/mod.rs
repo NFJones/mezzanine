@@ -767,6 +767,8 @@ pub struct ProviderWireRequestObserver {
     budget_receipts: Option<std::sync::Arc<dyn ProviderObservationReceiptFactory>>,
     budget_receipt_source: Option<std::sync::Arc<dyn ProviderObservationReceiptSource>>,
     reported: Option<SharedProviderReportedUsage>,
+    #[cfg(test)]
+    usage_prefix_witness: Option<std::sync::Arc<tokio::sync::Notify>>,
     /// A journal-owned observation lost its actor delivery channel. The
     /// observed adapter must fail locally instead of advancing private work.
     delivery_failed: AtomicBool,
@@ -793,8 +795,21 @@ impl ProviderWireRequestObserver {
             budget_receipts: None,
             budget_receipt_source: None,
             reported: None,
+            #[cfg(test)]
+            usage_prefix_witness: None,
             delivery_failed: AtomicBool::new(false),
         }
+    }
+
+    /// Observe actual decoder capture without publishing an observation,
+    /// checkpointing expense, yielding or changing transport/admission.
+    #[cfg(test)]
+    pub(crate) fn with_usage_prefix_witness_for_test(
+        mut self,
+        witness: std::sync::Arc<tokio::sync::Notify>,
+    ) -> Self {
+        self.usage_prefix_witness = Some(witness);
+        self
     }
 
     /// Associates observations with the immutable issued expense owner.

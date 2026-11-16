@@ -78,6 +78,12 @@ impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
         {
             self.usage = Some(usage);
         }
+        #[cfg(test)]
+        if presence.any()
+            && let Some(witness) = &self.context.observer.usage_prefix_witness
+        {
+            witness.notify_one();
+        }
     }
 
     /// Transfer numeric receipt and its source evidence together, never infer

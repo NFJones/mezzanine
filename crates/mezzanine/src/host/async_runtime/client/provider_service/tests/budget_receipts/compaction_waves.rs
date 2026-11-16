@@ -86,6 +86,19 @@ enum HoldControl {
     Release,
     Stop,
     StopIssued,
+    StopPartial,
+}
+
+/// A captured prefix is not terminal transport/receipt evidence: a held sibling
+/// cannot suspend the claim, and Stop must conserve the real prefix once.
+#[tokio::test]
+async fn budget_recursive_compaction_prefix_cannot_release_issued_lane() {
+    Box::pin(qualify(
+        false,
+        crossing_limits(),
+        Some(HoldControl::StopPartial),
+    ))
+    .await;
 }
 
 fn crossing_limits() -> BudgetLimits {
@@ -96,7 +109,11 @@ fn crossing_limits() -> BudgetLimits {
 }
 
 async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldControl>) {
-    let stop_issued = matches!(control, Some(HoldControl::StopIssued));
+    let partial = matches!(control, Some(HoldControl::StopPartial));
+    let stop_issued = matches!(
+        control,
+        Some(HoldControl::StopIssued | HoldControl::StopPartial)
+    );
     let stop_held = match control {
         Some(HoldControl::Release) => Some(false),
         Some(HoldControl::Stop) => Some(true),
@@ -167,6 +184,7 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
     let issued = Arc::new(tokio::sync::Notify::new());
     let physical_issued = issued.clone();
     let lane_wait = Arc::new(tokio::sync::Notify::new());
+    let prefix_witness = Arc::new(tokio::sync::Notify::new());
     let mut server = tokio::spawn(async move {
         // The same server task owns both sockets. For unlimited policy, do
         // not answer the first request until a second complete physical
@@ -238,6 +256,10 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
             }
             if stop_issued {
                 assert_eq!(prior, 0);
+                if partial {
+                    let prefix = serde_json::json!({"model":"test-model","choices":[],"usage":{"prompt_tokens":11,"completion_tokens":3}});
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {prefix}\n\n").as_bytes()).await?;
+                }
                 physical_issued.notify_one();
                 std::future::pending::<()>().await;
             }
@@ -299,7 +321,7 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                             ReqwestProviderHttpTransport,
                         )?
                         .with_provider_id("local-chat")?
-                        .with_streaming_options_for_test(false)?
+                        .with_streaming_options_for_test(partial)?
                         .with_endpoint(endpoint.clone()),
                     );
                 // Consume only timer descriptors; no fake timer callback or
@@ -314,6 +336,7 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                 }
                 let owner = ProviderWorkerOwner::compaction(&dispatch);
                 let waiter = handle.clone();
+                let decoded = prefix_witness.clone();
                 let admitted = spawn_owned_agent_provider_worker(
                     &mut workers,
                     &mut owners,
@@ -324,6 +347,11 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                         dispatch,
                         drains.clone(),
                         move |dispatch, observer| {
+                            let observer = if partial {
+                                observer.with_usage_prefix_witness_for_test(decoded)
+                            } else {
+                                observer
+                            };
                             execute_runtime_agent_compaction_dispatch_with_waiter(
                                 dispatch,
                                 observer,
@@ -342,6 +370,13 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                     .map_err(|_| {
                         MezError::invalid_state("issued/refused sibling boundary unavailable")
                     })?;
+                    if partial {
+                        tokio::time::timeout(Duration::from_secs(10), prefix_witness.notified())
+                            .await
+                            .map_err(|_| {
+                                MezError::invalid_state("original SSE prefix was not decoded")
+                            })?;
+                    }
                     assert_eq!(calls.load(Ordering::SeqCst), 1);
                     assert_eq!(rows(&store, "budget_admissions"), 1);
                     assert!(
@@ -681,7 +716,14 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
     if stop_issued {
         assert_eq!(
             store.budget_account(&original_member.root).unwrap().known,
-            UsageTotals::default()
+            if partial {
+                UsageTotals {
+                    input: 11,
+                    output: 3,
+                }
+            } else {
+                UsageTotals::default()
+            }
         );
         let snapshot: String = rusqlite::Connection::open(store.path())
             .unwrap()
