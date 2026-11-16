@@ -348,10 +348,18 @@ literal actor turn IDs containing suffix-shaped text.
 This checkpoint is not the atomic root-wide effect fence: policy can change after
 observation, and actual effect admission and production activation remain pending.
 
+The staged scheduler has independent human-pause and budget-exhaustion reasons.
+Clearing one does not clear the other or satisfy an approval/dependency wait.
+Fair selection and immediate blocked resumption both respect these reasons;
+issued work still belongs to its original settlement owner. Held queue entries
+keep their order and admission charge, and retired turns retain no budget wake
+metadata. This internal per-turn port is not root-qualified policy publication,
+an effect permit, or automatic budget-driven resumption.
+
 These internal allocation and accounting ports do **not** yet enable operational
-session budgets. Production assembly, fair waiting, complete terminal coverage,
-physical retirement, root-wide activity inhibition, policy controls, and their
-connected acceptance remain required; the ports alone are not a spending cap.
+session budgets. The provider waiting, accounting and retirement paths above must
+still be assembled with root-wide activity inhibition and persistent policy/UI
+controls and their connected acceptance; the ports alone are not a spending cap.
 
 ## Maintain the catalog
 

@@ -16619,6 +16619,17 @@ and result binding without SQLite I/O. Delivery observations MUST NOT be treated
 as current policy or permission to admit effects; root-wide atomic effect
 admission and policy recrossing remain separate contracts.
 
+The staged scheduler MUST keep budget exhaustion separate from human Pause.
+Clearing either reason MUST NOT clear the other, satisfy a dependency or approval,
+or create/requeue a turn. Both fair selection and immediate blocked resumption
+MUST respect those reasons. An inhibition update MUST NOT cancel issued work,
+claim its settlement, or release its capacity; the original owner parks or settles
+that work. Held queued work MUST keep its sequence and byte/count charge, and
+retirement MUST discard its inhibition metadata. Budget updates for unknown or
+retired turn identities MUST NOT retain wake debt. This per-turn scheduling port
+does not establish immutable root membership, fresh policy authority, effect
+admission, or policy-driven release, and MUST NOT activate production budgets.
+
 Telemetry schema16 adds a config-derived budget projection and exact publication
 receipts without replacing lifetime accounts. The primary config MUST remain the
 only authored global policy. An uninitialized, updating or conflicted projection

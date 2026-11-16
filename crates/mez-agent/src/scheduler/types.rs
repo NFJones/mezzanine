@@ -181,6 +181,9 @@ pub struct AgentScheduler {
     pub(super) reacquiring: HashMap<String, RunningWork>,
     /// Orthogonal human dispatch inhibition; dependencies cannot clear it.
     pub(super) human_paused: HashSet<String>,
+    /// Independent budget dispatch inhibition for admitted turns. This does not
+    /// cancel issued work, release claims, or establish root/policy authority.
+    pub(super) budget_exhausted: HashSet<String>,
     /// Stores the last started agent id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

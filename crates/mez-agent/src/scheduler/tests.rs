@@ -6,6 +6,8 @@ use super::{
     SchedulerErrorKind,
 };
 
+mod budget_inhibition;
+
 /// Runs the work operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

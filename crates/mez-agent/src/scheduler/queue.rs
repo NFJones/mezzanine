@@ -58,6 +58,7 @@ impl AgentScheduler {
             waiting: HashMap::new(),
             reacquiring: HashMap::new(),
             human_paused: HashSet::new(),
+            budget_exhausted: HashSet::new(),
             last_started_agent_id: None,
             admission_rejections: 0,
             readiness_checks: 0,
@@ -157,6 +158,7 @@ impl AgentScheduler {
             .ok_or_else(|| SchedulerError::new(SchedulerErrorKind::NotFound, "turn not found"))?;
         self.turn_states.remove(turn_id);
         self.human_paused.remove(turn_id);
+        self.budget_exhausted.remove(turn_id);
         self.release_claims(&work);
         Ok(work)
     }
@@ -246,6 +248,11 @@ impl AgentScheduler {
     /// they participate in fairness. This immediate path is retained for
     /// callers that have already established available provider capacity.
     pub fn resume_blocked(&mut self, turn_id: &str) -> SchedulerResult<RunningWork> {
+        if self.dispatch_is_inhibited(turn_id) {
+            return Err(SchedulerError::invalid_state(
+                "dispatch is inhibited for blocked turn resumption",
+            ));
+        }
         if self.active_capacity_used() >= self.max_concurrent_agents {
             return Err(SchedulerError::invalid_state(
                 "provider capacity is unavailable for blocked turn resumption",
@@ -267,6 +274,7 @@ impl AgentScheduler {
     /// not-found error when the turn id is unknown.
     pub fn cancel(&mut self, turn_id: &str) -> SchedulerResult<SchedulerCancellation> {
         self.human_paused.remove(turn_id);
+        self.budget_exhausted.remove(turn_id);
         if self.queued.contains_key(turn_id) {
             let state = self.turn_states.get(turn_id).copied();
             let work = self.remove_queued(turn_id).ok_or_else(|| {
@@ -352,7 +360,37 @@ impl AgentScheduler {
         }
     }
 
+    /// Sets only the budget inhibition reason for an already admitted turn.
+    ///
+    /// Returns false for unknown/retired turns without retaining wake metadata.
+    /// The caller owns immutable root membership, current policy/revision and
+    /// exhaustion proof; this operation supplies none of that authority. Issued
+    /// work keeps its capacity until its owner explicitly parks or settles it.
+    /// Clearing this reason never clears human pause, a dependency wait, or an
+    /// approval block, and never creates or requeues work. Queued work keeps its
+    /// original fairness position and admission charge.
+    pub fn set_budget_exhausted(&mut self, turn_id: &str, exhausted: bool) -> bool {
+        if !self.turn_states.contains_key(turn_id) {
+            return false;
+        }
+        let changed = if exhausted {
+            self.budget_exhausted.insert(turn_id.to_string())
+        } else {
+            self.budget_exhausted.remove(turn_id)
+        };
+        if changed && let Some(work) = self.queued.get(turn_id).map(|queued| queued.work.clone()) {
+            self.refresh_ready_for_agent(&work.agent_id);
+        }
+        true
+    }
+
+    fn dispatch_is_inhibited(&self, turn_id: &str) -> bool {
+        self.human_paused.contains(turn_id) || self.budget_exhausted.contains(turn_id)
+    }
+
     /// Iterates queued turns in their current fairness order.
+    ///
+    /// Held entries retain their original position and byte/count charge.
     pub fn queued_turns(&self) -> impl Iterator<Item = &ScheduledWork> {
         self.queued_order
             .values()
@@ -385,7 +423,7 @@ impl AgentScheduler {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn can_start(&self, work: &ScheduledWork) -> bool {
-        if self.human_paused.contains(&work.turn_id) {
+        if self.dispatch_is_inhibited(&work.turn_id) {
             return false;
         }
         let owns_reacquiring_claim =
@@ -416,7 +454,7 @@ impl AgentScheduler {
             .ready_order
             .iter()
             .find(|(_, agent_id, turn_id)| {
-                !self.human_paused.contains(turn_id)
+                !self.dispatch_is_inhibited(turn_id)
                     && (!prefer_new_agent
                         || self.last_started_agent_id.as_deref() != Some(agent_id.as_str()))
                     && self
