@@ -227,6 +227,7 @@ pub struct RuntimeSessionService {
 mod agent;
 pub(crate) use agent::token_budget::activity::{
     RuntimeBudgetActivityFailure, RuntimeBudgetActivityPreparation, RuntimeBudgetActivityRead,
+    RuntimeBudgetEffectClaim, RuntimeBudgetNativeClaim, RuntimeBudgetNativeClaimPreparation,
 };
 pub(crate) use agent::token_budget::admission_work::{
     RuntimeBudgetAdmissionWork, RuntimeBudgetHeldAttempt,

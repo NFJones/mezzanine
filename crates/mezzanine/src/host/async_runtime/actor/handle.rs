@@ -1285,8 +1285,26 @@ impl AsyncRuntimeSessionHandle {
         turn_id: String,
         action_id: String,
     ) -> Result<Option<RuntimeNativeShellDispatch>> {
-        if !self.reconcile_budget_activity(&turn_id).await? {
-            return Ok(None);
+        let preparation = self
+            .prepare_budget_native_shell_claim(turn_id.clone(), action_id.clone())
+            .await?;
+        match preparation {
+            crate::runtime::RuntimeBudgetNativeClaimPreparation::Refused => return Ok(None),
+            crate::runtime::RuntimeBudgetNativeClaimPreparation::Work(work) => {
+                let failure = work.failure_capture();
+                return match tokio::task::spawn_blocking(move || work.execute()).await {
+                    Ok(claim) => self.finish_budget_native_shell_claim(claim).await,
+                    Err(_) => {
+                        self.request(|reply| AsyncRuntimeRequest::FailBudgetActivityRead {
+                            failure,
+                            reply,
+                        })
+                        .await?;
+                        Ok(None)
+                    }
+                };
+            }
+            crate::runtime::RuntimeBudgetNativeClaimPreparation::Disabled => {}
         }
         self.request(|reply| AsyncRuntimeRequest::ClaimNativeShellAction {
             turn_id,
@@ -1294,6 +1312,29 @@ impl AsyncRuntimeSessionHandle {
             reply,
         })
         .await?
+    }
+
+    /// Captures only an exact original offer; this is not a native claim yet.
+    pub(crate) async fn prepare_budget_native_shell_claim(
+        &self,
+        turn_id: String,
+        action_id: String,
+    ) -> Result<crate::runtime::RuntimeBudgetNativeClaimPreparation> {
+        self.request(|reply| AsyncRuntimeRequest::PrepareBudgetNativeClaim {
+            turn_id,
+            action_id,
+            reply,
+        })
+        .await
+    }
+
+    /// Transfers one sealed native claim after the writer lock has been released.
+    pub(crate) async fn finish_budget_native_shell_claim(
+        &self,
+        claim: Box<crate::runtime::RuntimeBudgetNativeClaim>,
+    ) -> Result<Option<RuntimeNativeShellDispatch>> {
+        self.request(|reply| AsyncRuntimeRequest::FinishBudgetNativeClaim { claim, reply })
+            .await?
     }
 
     /// Recovers original filesystem tokens/allocations for the sole provider

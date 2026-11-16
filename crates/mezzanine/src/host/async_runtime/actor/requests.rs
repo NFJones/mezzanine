@@ -3211,6 +3211,29 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(self.service.fail_budget_activity_read(failure));
                 false
             }
+            AsyncRuntimeRequest::PrepareBudgetNativeClaim {
+                turn_id,
+                action_id,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.service
+                        .prepare_budget_native_shell_claim(&turn_id, &action_id),
+                );
+                false
+            }
+            AsyncRuntimeRequest::FinishBudgetNativeClaim { claim, reply } => {
+                let (turn, action) = claim.subject();
+                let (turn, action) = (turn.to_owned(), action.to_owned());
+                let result = self.service.finish_budget_native_shell_claim(*claim);
+                self.settle_native_offer(&turn, &action);
+                let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                false
+            }
             #[cfg(test)]
             AsyncRuntimeRequest::InjectBudgetActivityFault {
                 turn_id,

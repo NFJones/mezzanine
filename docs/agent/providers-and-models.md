@@ -365,9 +365,14 @@ external handle claims reobserve before their normal actor claim, while known
 root holds also fence provider readiness, ready selection and filesystem claims.
 Capture refusal or a joined reader failure withholds the original offer locally,
 without aborting unrelated provider workers. Actor transport loss is still an
-error. Original issued settlement remains separate. A clear observation is not an effect
-permit or automatic wake: cross-process commit/claim serialization, all inline
-action boundaries, drain proof and qualified release remain unfinished.
+error. Original issued settlement remains separate. A clear observation is not an
+effect permit or automatic wake. Native-shell admission separately claims one
+exact offer inside the accounting writer order, with the lock released before
+actor handoff and execution. Later numeric edits do not revoke that already-issued
+budget claim; human pause/Stop/supersession and operational integrity still fence
+transfer. A dropped never-transferred claim withdraws only its original reservation.
+Other families' atomic fencing, all inline boundaries, drain proof and qualified
+automatic release remain unfinished.
 
 These internal allocation and accounting ports do **not** yet enable operational
 session budgets. The provider waiting, accounting and retirement paths above must

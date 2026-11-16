@@ -140,6 +140,59 @@ impl BudgetSendPermit {
     }
 }
 
+/// Reads only from the caller's transaction: a second connection would not
+/// inherit its writer ordering or its pinned accounting-store identity.
+fn activity_state(
+    tx: &rusqlite::Connection,
+    member: &BudgetMembership,
+    owner: &str,
+    lease: &BudgetBindingLease,
+) -> Result<BudgetAdmissionWaitState> {
+    if namespace(tx)? != member.namespace {
+        return Err(MezError::conflict("budget wait namespace mismatch"));
+    }
+    let original = membership::membership(tx, &member.conversation)?;
+    let binding: Option<String> = tx
+        .query_row(
+            "SELECT owner FROM budget_bindings WHERE conversation=?1",
+            [&member.conversation],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if original != Some((member.clone(), BudgetMembershipState::Active))
+        || binding.as_deref() != Some(owner)
+    {
+        return Err(MezError::conflict(
+            "budget wait original binding unavailable",
+        ));
+    }
+    let projection = policy_projection::read_projection(tx)?;
+    let account = account(tx, &member.root)?;
+    let limits = projection.admission_policy().map(|defaults| BudgetLimits {
+        input: account.input_override.resolve(defaults.input),
+        output: account.output_override.resolve(defaults.output),
+    });
+    let root_outstanding = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM budget_admissions WHERE root=?1 AND retired_receipt IS NULL)
+         OR EXISTS(SELECT 1 FROM budget_attempts WHERE root=?1 AND terminal=0)",
+        [member.root.as_str()],
+        |r| r.get(0),
+    )?;
+    let state = BudgetAdmissionWaitState {
+        revisions: BudgetAdmissionRevisions {
+            projection: projection.revision,
+            root_policy: account.policy_revision,
+            accounting: account.accounting_revision,
+        },
+        limits,
+        known: account.known,
+        root_outstanding,
+        outstanding_attempts: receipts::outstanding_attempts(tx)?,
+    };
+    lease.revalidate()?;
+    Ok(state)
+}
+
 pub(super) fn initialize_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
     // No migration invents authorization for older registered attempts.
     tx.execute_batch(
@@ -169,47 +222,39 @@ impl TokenUsageStore {
         lease.revalidate()?;
         let mut connection = self.open_budget_query()?;
         let tx = connection.transaction()?;
-        if namespace(&tx)? != member.namespace {
-            return Err(MezError::conflict("budget wait namespace mismatch"));
+        activity_state(&tx, member, owner, lease)
+    }
+
+    /// Off-actor only. Orders one exact offer's in-memory claim transition with
+    /// existing policy/accounting writers. The callback MUST perform only its
+    /// sealed atomic transition: no I/O, actor request, wait or execution. No
+    /// inference attempt, receipt, policy change or second ledger is created.
+    /// A returned snapshot alone grants nothing; only that transition claims.
+    pub(crate) fn claim_budget_activity(
+        &self,
+        member: &BudgetMembership,
+        owner: &str,
+        lease: &BudgetBindingLease,
+        claim: impl FnOnce(),
+    ) -> Result<BudgetAdmissionWaitState> {
+        validate_id(owner)?;
+        if !lease.matches(member, owner) {
+            return Err(MezError::conflict("budget claim native subject mismatch"));
         }
-        let original = membership::membership(&tx, &member.conversation)?;
-        let binding: Option<String> = tx
-            .query_row(
-                "SELECT owner FROM budget_bindings WHERE conversation=?1",
-                [&member.conversation],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if original != Some((member.clone(), BudgetMembershipState::Active))
-            || binding.as_deref() != Some(owner)
-        {
-            return Err(MezError::conflict(
-                "budget wait original binding unavailable",
-            ));
-        }
-        let projection = policy_projection::read_projection(&tx)?;
-        let account = account(&tx, &member.root)?;
-        let limits = projection.admission_policy().map(|defaults| BudgetLimits {
-            input: account.input_override.resolve(defaults.input),
-            output: account.output_override.resolve(defaults.output),
-        });
-        let root_outstanding = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM budget_admissions WHERE root=?1 AND retired_receipt IS NULL)
-             OR EXISTS(SELECT 1 FROM budget_attempts WHERE root=?1 AND terminal=0)",
-            [member.root.as_str()], |r| r.get(0),
-        )?;
-        let state = BudgetAdmissionWaitState {
-            revisions: BudgetAdmissionRevisions {
-                projection: projection.revision,
-                root_policy: account.policy_revision,
-                accounting: account.accounting_revision,
-            },
-            limits,
-            known: account.known,
-            root_outstanding,
-            outstanding_attempts: receipts::outstanding_attempts(&tx)?,
-        };
         lease.revalidate()?;
+        let mut connection = self.open_budget()?;
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let state = activity_state(&tx, member, owner, lease)?;
+        if state.limits.is_some_and(|limits| {
+            !limits.input.exhausted(state.known.input)
+                && !limits.output.exhausted(state.known.output)
+        }) {
+            claim();
+        }
+        // This transaction writes no database rows. Release its ordering lock
+        // before returning to any actor or physical effect. Failure withholds
+        // the outcome; the caller's original guard revokes an unconsumed claim.
+        tx.rollback()?;
         Ok(state)
     }
 

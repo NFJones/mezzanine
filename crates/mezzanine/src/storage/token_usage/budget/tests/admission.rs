@@ -7,6 +7,66 @@ use crate::storage::token_usage::budget::policy_projection::*;
 use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 use mez_agent::token_budget::{BudgetLimits, BudgetOverride, TokenLimit};
 
+/// The in-memory claim transition runs inside the same writer order as policy
+/// and expense. A second connection probes that exact cut, not elapsed timing.
+/// No inference registration or synthetic receipt may be created for an effect.
+#[test]
+fn budget_activity_claim_transition_excludes_writers_and_creates_no_expense() {
+    let f = Fixture::new();
+    let (member, lease) = native(&f, "root", None);
+    publish(&f, TokenLimit::Unlimited, TokenLimit::Unlimited);
+    let competitor = f.store.open_budget().unwrap();
+    competitor.busy_timeout(std::time::Duration::ZERO).unwrap();
+    let callbacks = std::cell::Cell::new(0);
+    let observed = f
+        .store
+        .claim_budget_activity(&member, "root", &lease, || {
+            // Test-only lock probe; the production callback is solely an atomic CAS.
+            let error = competitor.execute_batch("BEGIN IMMEDIATE").unwrap_err();
+            assert!(matches!(error, rusqlite::Error::SqliteFailure(code, _)
+            if code.code == rusqlite::ErrorCode::DatabaseBusy));
+            callbacks.set(callbacks.get() + 1);
+        })
+        .unwrap();
+    assert_eq!(observed.known, UsageTotals::default());
+    assert_eq!(callbacks.get(), 1);
+    competitor
+        .execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
+        .unwrap();
+    publish(&f, TokenLimit::Limited(0), TokenLimit::Unlimited);
+    let held = f
+        .store
+        .claim_budget_activity(&member, "root", &lease, || {
+            callbacks.set(callbacks.get() + 1);
+        })
+        .unwrap();
+    assert_eq!(held.limits.unwrap().input, TokenLimit::Limited(0));
+    assert_eq!(
+        callbacks.get(),
+        1,
+        "numeric exhaustion must never invoke the claim"
+    );
+    assert!(
+        f.store
+            .claim_budget_activity(&member, "foreign", &lease, || {
+                callbacks.set(callbacks.get() + 1);
+            })
+            .is_err()
+    );
+    assert_eq!(callbacks.get(), 1);
+    for table in ["budget_attempts", "budget_admissions", "budget_receipts"] {
+        assert_eq!(
+            f.store
+                .open_budget()
+                .unwrap()
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+
 /// Failed BEGIN has written nothing. Exact absence may become an operational
 /// hold, but an existing grant or registration must never acquire fresh-send
 /// authority merely because another writer currently holds the database.

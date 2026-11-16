@@ -232,17 +232,74 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Claims one authorized native shell action for worker execution.
+    /// A read-only capture of the exact still-unissued offer. Budget state is
+    /// deliberately checked by native authorization, not this snapshot.
+    pub(in crate::runtime::agent) fn budget_native_shell_candidate(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> Option<&crate::runtime::RuntimeNativeShellDispatch> {
+        if self.agent_provider_failure_is_refused(turn_id)
+            || self.agent_turn_is_human_paused(turn_id)
+            || !self.native_shell_action_turn_is_current(turn_id, action_id)
+            || self
+                .agent
+                .claimed_native_shell_dispatches
+                .contains_key(&(turn_id.into(), action_id.into()))
+        {
+            return None;
+        }
+        self.agent
+            .pending_native_shell_dispatches
+            .get(&(turn_id.into(), action_id.into()))
+    }
+
+    /// Legacy/disabled assembly cannot bypass enabled native budget admission.
     pub(crate) fn claim_native_shell_action(
         &mut self,
         turn_id: &str,
         action_id: &str,
     ) -> Result<Option<crate::runtime::RuntimeNativeShellDispatch>> {
+        if self.runtime_budget_assembly_enabled() {
+            return Ok(None);
+        }
+        self.claim_native_shell_action_inner(turn_id, action_id, false)
+    }
+
+    /// Transfers only the writer-claimed original offer. This is not permission
+    /// to reuse the witness for another marker, offer allocation or action.
+    pub(in crate::runtime::agent) fn claim_native_shell_action_with_budget(
+        &mut self,
+        turn_id: &str,
+        action_id: &str,
+        marker: &str,
+        claim: &crate::runtime::RuntimeBudgetEffectClaim,
+    ) -> Result<Option<crate::runtime::RuntimeNativeShellDispatch>> {
+        if !claim.transferred()
+            || self
+                .budget_native_shell_candidate(turn_id, action_id)
+                .is_none_or(|candidate| {
+                    candidate.marker != marker || candidate.budget_claim.as_ref() != Some(claim)
+                })
+        {
+            return Ok(None);
+        }
+        self.claim_native_shell_action_inner(turn_id, action_id, true)
+    }
+
+    fn claim_native_shell_action_inner(
+        &mut self,
+        turn_id: &str,
+        action_id: &str,
+        budget_claimed: bool,
+    ) -> Result<Option<crate::runtime::RuntimeNativeShellDispatch>> {
         if self.agent_provider_failure_is_refused(turn_id) {
             return Ok(None);
         }
         self.ensure_completion_admission_open()?;
-        if self.agent_turn_is_human_paused(turn_id) || self.budget_activity_inhibits_turn(turn_id) {
+        if self.agent_turn_is_human_paused(turn_id)
+            || (!budget_claimed && self.budget_activity_inhibits_turn(turn_id))
+        {
             return Ok(None);
         }
         let identity = (turn_id.to_string(), action_id.to_string());

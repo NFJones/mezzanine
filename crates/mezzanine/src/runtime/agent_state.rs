@@ -111,6 +111,8 @@ pub(crate) struct RuntimeNativeShellDispatch {
     pub(crate) action_id: String,
     /// Exact transaction marker used to fence stale worker completions.
     pub(crate) marker: String,
+    /// Exact optional native budget claim; clones share this offer's identity.
+    pub(crate) budget_claim: Option<crate::runtime::RuntimeBudgetEffectClaim>,
     /// Monotonic actor/worker-owner cancellation for this exact dispatch.
     pub(crate) cancellation:
         crate::runtime::processes::native_cancellation::NativeActionCancellation,

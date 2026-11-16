@@ -1044,6 +1044,17 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         failure: crate::runtime::RuntimeBudgetActivityFailure,
         reply: oneshot::Sender<bool>,
     },
+    /// Captures one exact native offer without doing actor storage I/O.
+    PrepareBudgetNativeClaim {
+        turn_id: String,
+        action_id: String,
+        reply: oneshot::Sender<crate::runtime::RuntimeBudgetNativeClaimPreparation>,
+    },
+    /// Transfers only a sealed writer-ordered claim, never a snapshot grant.
+    FinishBudgetNativeClaim {
+        claim: Box<crate::runtime::RuntimeBudgetNativeClaim>,
+        reply: oneshot::Sender<Result<Option<crate::runtime::RuntimeNativeShellDispatch>>>,
+    },
     #[cfg(test)]
     InjectBudgetActivityFault {
         turn_id: String,
@@ -1852,6 +1863,8 @@ impl AsyncRuntimeRequest {
             | Self::PrepareBudgetActivityRead { .. }
             | Self::ApplyBudgetActivityRead { .. }
             | Self::FailBudgetActivityRead { .. }
+            | Self::PrepareBudgetNativeClaim { .. }
+            | Self::FinishBudgetNativeClaim { .. }
             | Self::ParkBudgetAuxiliaryClaim { .. }
             | Self::ResumeBudgetAuxiliaryClaim { .. }
             | Self::SelectBudgetReconsideration { .. }

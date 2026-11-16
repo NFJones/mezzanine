@@ -3,14 +3,20 @@
 //! One cancellable read per root observes coherent policy and known expense off
 //! actor. Sealed outcomes can update only their original live membership capture;
 //! stale reads never transfer to a replacement conversation or repository. This
-//! is an inhibition projection, NOT a budget grant or atomic cross-store effect
-//! claim. Every claim still needs its original permission/ownership boundaries;
-//! production assembly and revision-driven continuation remain staged.
+//! descriptive projection is NOT a grant. The native_claim leaf separately
+//! claims one exact native-shell offer inside the accounting writer order;
+//! actor transfer still checks original permission/ownership boundaries.
+//! Other effect families, production assembly and automatic release remain staged.
 
 use super::{BudgetMembership, RuntimeSessionService};
 use crate::error::{MezError, Result};
 use crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState;
 use std::sync::{Arc, Weak};
+
+mod native_claim;
+pub(crate) use native_claim::{
+    RuntimeBudgetEffectClaim, RuntimeBudgetNativeClaim, RuntimeBudgetNativeClaimPreparation,
+};
 
 pub(super) type RootKey = (String, String);
 
@@ -57,14 +63,13 @@ impl RootActivity {
         })
     }
 
-    fn inhibited(&self) -> bool {
+    fn operationally_inhibited(&self) -> bool {
         self.pending.is_some()
             || self.failure.is_some()
             || self
                 .observed
                 .as_ref()
                 .is_none_or(|state| state.limits.is_none())
-            || self.exhausted()
     }
 }
 
@@ -376,6 +381,20 @@ impl RuntimeSessionService {
     /// Local deny-only projection. Absence leaves staged callers unchanged;
     /// installed pending/unavailable roots are distinct from numeric exhaustion.
     pub(crate) fn budget_activity_inhibits_turn(&self, turn_id: &str) -> bool {
+        self.budget_activity_operationally_inhibits_turn(turn_id)
+            || self
+                .budget_activity_key_for_turn(turn_id)
+                .and_then(|key| self.agent.budget_memberships.activity.get(&key))
+                .is_some_and(RootActivity::exhausted)
+    }
+
+    /// A native claim may predate a numeric crossing, never an unresolved
+    /// membership/read/integrity refusal. Adoption acknowledgment is not proof
+    /// that these independently retained operational gates were cleared.
+    pub(in crate::runtime::agent) fn budget_activity_operationally_inhibits_turn(
+        &self,
+        turn_id: &str,
+    ) -> bool {
         if let Some(turn) = self.agent_turn_ledger().turn(turn_id)
             && let Some(failure) = self
                 .agent
@@ -393,6 +412,6 @@ impl RuntimeSessionService {
         }
         self.budget_activity_key_for_turn(turn_id)
             .and_then(|key| self.agent.budget_memberships.activity.get(&key))
-            .is_some_and(RootActivity::inhibited)
+            .is_some_and(RootActivity::operationally_inhibited)
     }
 }

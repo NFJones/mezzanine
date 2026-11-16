@@ -339,6 +339,11 @@ impl RuntimeBudgetMembershipWork {
 }
 
 impl RuntimeSessionService {
+    /// Assembly state only, never a policy decision or effect authorization.
+    pub(in crate::runtime::agent) fn runtime_budget_assembly_enabled(&self) -> bool {
+        self.agent.budget_memberships.enabled
+    }
+
     /// Captures immutable work without disk I/O or changing the selected root on
     /// retry. Disabled assembly preserves existing behavior. Once enabled,
     /// either missing repository is unavailable accounting, never zero expense.

@@ -35,6 +35,46 @@ async fn budget_completed_response_prepared_native_claim_rechecks_lowered_policy
     Box::pin(qualify(CompletionCase::ClaimRecross)).await;
 }
 
+/// A descriptive read can pass a reserved SQLite writer. Native effect
+/// admission must instead order after that writer, without issuing the offer.
+#[tokio::test]
+async fn budget_completed_response_native_claim_orders_after_existing_writer() {
+    Box::pin(qualify(CompletionCase::ClaimWriterContention)).await;
+}
+
+/// A native claim linearizes before the later policy writer, even if actor
+/// handoff follows it. Dropped untransferred claims instead release only their
+/// original reservation and leave the offer eligible for a fresh claim.
+#[tokio::test]
+async fn budget_completed_response_native_claim_boundary_and_withdrawal_are_once_only() {
+    for mode in [
+        CompletionCase::NativeClaimBeforeRecross,
+        CompletionCase::NativeClaimDrop,
+        CompletionCase::NativeCaptureDrop,
+        CompletionCase::NativeReadObserverDrop,
+    ] {
+        Box::pin(qualify(mode)).await;
+    }
+}
+
+#[tokio::test]
+async fn budget_completed_response_claimed_native_cannot_clear_human_pause() {
+    Box::pin(qualify(CompletionCase::NativeClaimPause)).await;
+}
+
+#[tokio::test]
+async fn budget_completed_response_native_claim_cannot_revive_stopped_owner() {
+    Box::pin(qualify(CompletionCase::NativeClaimStop)).await;
+}
+
+/// A native transaction can observe an internally valid but regressed account.
+/// Adoption must preserve the previously observed integrity fence, not mistake
+/// its acknowledgment for permission to transfer the original effect claim.
+#[tokio::test]
+async fn budget_completed_response_native_claim_refuses_regressed_account() {
+    Box::pin(qualify(CompletionCase::NativeClaimRegression)).await;
+}
+
 #[tokio::test]
 async fn budget_completed_response_capture_and_reader_refusal_retain_original_native_offer() {
     for mode in [CompletionCase::CaptureRefusal, CompletionCase::ReaderPanic] {
@@ -83,6 +123,14 @@ enum CompletionCase {
     ReadFailure,
     Adopt,
     ClaimRecross,
+    ClaimWriterContention,
+    NativeClaimBeforeRecross,
+    NativeClaimDrop,
+    NativeCaptureDrop,
+    NativeClaimPause,
+    NativeClaimStop,
+    NativeClaimRegression,
+    NativeReadObserverDrop,
     CaptureRefusal,
     ReaderPanic,
     StopBeforeAdoption,
@@ -107,6 +155,14 @@ async fn qualify(mode: CompletionCase) {
         mode,
         CompletionCase::Adopt
             | CompletionCase::ClaimRecross
+            | CompletionCase::ClaimWriterContention
+            | CompletionCase::NativeClaimBeforeRecross
+            | CompletionCase::NativeClaimDrop
+            | CompletionCase::NativeCaptureDrop
+            | CompletionCase::NativeClaimPause
+            | CompletionCase::NativeClaimStop
+            | CompletionCase::NativeClaimRegression
+            | CompletionCase::NativeReadObserverDrop
             | CompletionCase::CaptureRefusal
             | CompletionCase::ReaderPanic
             | CompletionCase::StopBeforeAdoption
@@ -458,6 +514,29 @@ async fn qualify(mode: CompletionCase) {
                 }).collect::<Vec<_>>();
                 if offers.len() != usize::from(expected) { return Err(format!("native candidate offers: expected {expected}, got {}", offers.len())); }
                 if let Some(action) = offers.first() {
+                    if mode == CompletionCase::NativeClaimRegression {
+                        if !handle.reconcile_budget_activity(&turn).await.unwrap() {
+                            return Err("original root observation was not adopted".to_owned());
+                        }
+                        let original = store.budget_account(&member.root).unwrap();
+                        let mut regressed = original.clone();
+                        regressed.known.input = 0;
+                        let writer = rusqlite::Connection::open(store.path()).unwrap();
+                        writer.execute("UPDATE budget_roots SET body=?1 WHERE id=?2", rusqlite::params![serde_json::to_string(&regressed).unwrap(), member.root.as_str()]).unwrap();
+                        let refused = handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap().is_none();
+                        writer.execute("UPDATE budget_roots SET body=?1 WHERE id=?2", rusqlite::params![serde_json::to_string(&original).unwrap(), member.root.as_str()]).unwrap();
+                        drop(writer);
+                        if !refused { return Err("native claim bypassed the observed accounting-integrity fence".to_owned()); }
+                        if counter.exists() { return Err("integrity-refused native offer executed".to_owned()); }
+                    }
+                    if mode == CompletionCase::ClaimWriterContention {
+                        let writer = rusqlite::Connection::open(store.path()).unwrap();
+                        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+                        let refused = handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap().is_none();
+                        writer.execute_batch("ROLLBACK").unwrap();
+                        if !refused { return Err("native claim bypassed the original accounting/policy writer".to_owned()); }
+                        if counter.exists() { return Err("writer-held native offer executed".to_owned()); }
+                    }
                     if matches!(mode, CompletionCase::CaptureRefusal | CompletionCase::ReaderPanic) {
                         handle.inject_budget_activity_fault(turn.clone(), mode == CompletionCase::ReaderPanic).await.unwrap();
                         if handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap().is_some() {
@@ -484,8 +563,68 @@ async fn qualify(mode: CompletionCase) {
                         }
                         super::remember_retirement::publish_policy(&store, "claim-sufficient", 'a', BudgetLimits::default()).await;
                     }
-                    let native = handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap()
-                        .ok_or_else(|| "original native offer did not claim".to_owned())?;
+                    if mode == CompletionCase::NativeCaptureDrop {
+                        let crate::runtime::RuntimeBudgetNativeClaimPreparation::Work(work) = handle.prepare_budget_native_shell_claim(turn.clone(), action.clone()).await.unwrap() else {
+                            return Err("original offer did not capture native claim work".to_owned());
+                        };
+                        drop(work);
+                    }
+                    let preclaimed = if matches!(mode, CompletionCase::NativeClaimBeforeRecross | CompletionCase::NativeClaimDrop | CompletionCase::NativeClaimPause | CompletionCase::NativeClaimStop | CompletionCase::NativeReadObserverDrop) {
+                        let crate::runtime::RuntimeBudgetNativeClaimPreparation::Work(mut work) = handle.prepare_budget_native_shell_claim(turn.clone(), action.clone()).await.unwrap() else {
+                            return Err("original offer did not prepare a native claim".to_owned());
+                        };
+                        let claim = if mode == CompletionCase::NativeReadObserverDrop {
+                            let (entered, release) = work.gate_native_writer_for_tests();
+                            let mut writer = tokio::task::spawn_blocking(move || work.execute());
+                            tokio::time::timeout(Duration::from_secs(5), entered.notified()).await.unwrap();
+                            let mut borrowed = Box::pin(async { (&mut writer).await });
+                            let pending = borrowed.as_mut().now_or_never().is_none();
+                            drop(borrowed);
+                            let coalesced = matches!(handle.prepare_budget_native_shell_claim(turn.clone(), action.clone()).await.unwrap(), crate::runtime::RuntimeBudgetNativeClaimPreparation::Refused);
+                            release.send(()).unwrap();
+                            let claim = writer.await.unwrap();
+                            if !pending || !coalesced { return Err("borrowed observer cancellation released a live original writer".to_owned()); }
+                            claim
+                        } else { tokio::task::spawn_blocking(move || work.execute()).await.unwrap() };
+                        if !matches!(handle.prepare_budget_native_shell_claim(turn.clone(), action.clone()).await.unwrap(), crate::runtime::RuntimeBudgetNativeClaimPreparation::Refused) {
+                            return Err("a second query borrowed the original native claim".to_owned());
+                        }
+                        if mode == CompletionCase::NativeClaimDrop {
+                            drop(claim);
+                            None
+                        } else if mode == CompletionCase::NativeClaimStop {
+                            handle.execute_agent_shell_command(primary.clone(), "/stop".into()).await.unwrap();
+                            if handle.finish_budget_native_shell_claim(claim).await.unwrap().is_some() || counter.exists() {
+                                return Err("native budget claim revived a stopped owner".to_owned());
+                            }
+                            return Ok(true);
+                        } else if mode == CompletionCase::NativeClaimPause {
+                            waiting::browser_input(&handle, &primary, b"/list-agents --all\r").await;
+                            waiting::browser_input(&handle, &primary, b"p").await;
+                            waiting::assert_browser_paused(&handle, "%1", true).await;
+                            if handle.finish_budget_native_shell_claim(claim).await.unwrap().is_some() || counter.exists() {
+                                return Err("native budget claim bypassed human pause".to_owned());
+                            }
+                            waiting::browser_input(&handle, &primary, b"p").await;
+                            waiting::assert_browser_paused(&handle, "%1", false).await;
+                            // Explicit human Resume intentionally supersedes
+                            // unissued candidates; it must not revive this offer.
+                            if handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap().is_some() || counter.exists() {
+                                return Err("human Resume revived a superseded native offer".to_owned());
+                            }
+                            return Ok(true);
+                        } else {
+                            super::remember_retirement::publish_policy(&store, "post-native-claim", 'e', BudgetLimits {
+                                input: TokenLimit::Limited(0), output: TokenLimit::Limited(0),
+                            }).await;
+                            Some(handle.finish_budget_native_shell_claim(claim).await.unwrap()
+                                .ok_or_else(|| "later budget edit revoked an already native-claimed effect".to_owned())?)
+                        }
+                    } else { None };
+                    let native = if let Some(native) = preclaimed { native } else {
+                        handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap()
+                            .ok_or_else(|| "original native offer did not claim".to_owned())?
+                    };
                     if mode == CompletionCase::MonitorError {
                         let owner = NativeWorkerOwner::new(&native);
                         fault_owner = Some(owner.clone());
@@ -655,7 +794,10 @@ async fn qualify(mode: CompletionCase) {
         if adopt
             && !matches!(
                 mode,
-                CompletionCase::StopBeforeAdoption | CompletionCase::MonitorError
+                CompletionCase::StopBeforeAdoption
+                    | CompletionCase::MonitorError
+                    | CompletionCase::NativeClaimPause
+                    | CompletionCase::NativeClaimStop
             )
         {
             b"x".as_slice()

@@ -16642,10 +16642,18 @@ reobserve their original binding. Clearing an observed reason MUST NOT itself
 requeue a turn or execute an old approved candidate. Root-local capture refusal
 or joined reader failure MUST withhold the affected claim without tearing down
 shared provider work; loss of the actor transport remains an independent error.
-These reads are descriptive:
-they do not serialize a later effect claim with another process's policy/expense
-commit, prove draining/quiescence, fence every inline action, or implement automatic
-release. Those boundaries remain required before production budget activation.
+These reads are descriptive and MUST NOT themselves grant an effect.
+Enabled native-shell admission MUST separately claim its exact original offer
+inside the accounting store's writer order, after validating its original native
+binding and current policy/totals. Only the sealed offer-bound atomic transition,
+not the returned snapshot, is budget claim authority. The writer lock MUST be
+released before actor handoff or execution; this creates no inference attempt or
+synthetic usage receipt. A later numeric crossing MUST NOT retroactively revoke
+that issued budget claim. Human pause, Stop, supersession and operational/integrity
+fences remain independent. Dropping an original never-transferred claim MAY
+withdraw only that claim after its worker exits, never replay an issued effect.
+Other families' atomic claim fencing, draining/quiescence proof, every inline
+action boundary and automatic release remain required before production activation.
 
 Telemetry schema16 adds a config-derived budget projection and exact publication
 receipts without replacing lifetime accounts. The primary config MUST remain the
