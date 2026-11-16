@@ -11092,6 +11092,13 @@ resample the latest body to refresh a stale fence. Moved failed backing MUST kee
 its original source; missing, plain or cold-recreated replacements MUST refuse
 that retirement. An exact already-completed private fence MAY verify a local retry
 without reissuing effects or acknowledging ordinary transcript durability.
+When legitimate compaction covers an already-closed group's raw source, its
+private closure witness MUST remain verifiable while an original execution fence
+still holds that protection allocation. Covered closure metadata MUST retain only
+a weak allocation reference, MUST be pruned after its last owner is dropped, and
+MUST NOT preserve a second history body or serialize a retirement capability.
+Renewed protection, new same-group source, and plain or cold-recreated owners MUST
+still invalidate the old closure; absence or a nonpending flag alone is not proof.
 An obsolete unclaimed provider offer MUST yield to the exact native shell or
 filesystem execution owner and healthy publication-only recovery owner. Retiring
 that offer MUST NOT retire the original action, fabricate archive handoff, or

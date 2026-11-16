@@ -4,6 +4,7 @@
 use super::*;
 
 mod checkpoint;
+mod completion_retirement;
 mod continuation;
 mod edits;
 mod execution_state;

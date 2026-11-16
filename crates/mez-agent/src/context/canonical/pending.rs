@@ -45,6 +45,14 @@ impl ContextExecutionProtection {
         &self.interval
     }
 
+    /// Remembers a completed allocation without keeping its source owners alive.
+    pub(super) fn witness(&self) -> ContextExecutionProtectionWitness {
+        ContextExecutionProtectionWitness {
+            allocation: std::sync::Arc::downgrade(&self.allocation),
+            interval: self.interval.clone(),
+        }
+    }
+
     /// Original-source qualification refines a provisional description, not the
     /// already admitted live protection interval. Its captured fence stays valid.
     pub(super) fn with_interval(&self, interval: ExecutionInterval) -> Self {
@@ -62,6 +70,38 @@ impl PartialEq for ContextExecutionProtection {
     }
 }
 impl Eq for ContextExecutionProtection {}
+
+/// Nonowning evidence of an actual completed interval. Raw-source closure can
+/// outlive the last handle, but a covered closure is retained only while an
+/// original handle or snapshot still holds that exact allocation. This cannot
+/// recreate protection, authorize effects, or survive checkpoint decoding.
+#[derive(Debug, Clone)]
+pub(super) struct ContextExecutionProtectionWitness {
+    allocation: std::sync::Weak<()>,
+    interval: ExecutionInterval,
+}
+
+impl ContextExecutionProtectionWitness {
+    pub(super) fn interval(&self) -> &ExecutionInterval {
+        &self.interval
+    }
+
+    pub(super) fn has_owner(&self) -> bool {
+        self.allocation.strong_count() != 0
+    }
+
+    pub(super) fn matches(&self, protection: &ContextExecutionProtection) -> bool {
+        self.allocation
+            .ptr_eq(&std::sync::Arc::downgrade(&protection.allocation))
+    }
+}
+
+impl PartialEq for ContextExecutionProtectionWitness {
+    fn eq(&self, other: &Self) -> bool {
+        self.allocation.ptr_eq(&other.allocation)
+    }
+}
+impl Eq for ContextExecutionProtectionWitness {}
 
 impl AgentContext {
     /// Nonempty groups consisting solely of runtime observations cannot mint

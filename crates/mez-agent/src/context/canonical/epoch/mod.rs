@@ -300,7 +300,7 @@ impl ReplayEpochContext {
             owner.group.clone(),
             ReplayExecutionClosure {
                 frontier: owner.frontier,
-                protection,
+                protection: protection.witness(),
             },
         );
         candidate.refresh_accounting_group(&owner.group)?;
@@ -312,17 +312,22 @@ impl ReplayEpochContext {
     /// Verifies an exact already-completed controller source fence for an
     /// idempotent local retirement retry. Cold descriptive completion, a foreign
     /// incarnation, reopened source or a newer frontier cannot satisfy it.
+    /// Legitimate compaction may cover the raw frontier; its original weak
+    /// closure remains verifiable only while that exact allocation is held.
     /// This grants no native worker, child result or persistence acknowledgment.
     pub fn execution_group_finished(&self, owner: &ReplayExecutionOwner) -> bool {
         owner.owner_identity == self.owner_identity
             && !self.context.execution_group_is_pending(&owner.group)
-            && self.group_frontier(&owner.group) == Some(owner.frontier)
+            && self
+                .group_frontier(&owner.group)
+                .is_none_or(|frontier| frontier == owner.frontier)
             && self
                 .source_lifecycle
                 .closed_groups
                 .get(&owner.group)
                 .is_some_and(|closed| {
-                    closed.frontier == owner.frontier && closed.protection == owner.protection
+                    closed.frontier == owner.frontier
+                        && closed.protection.matches(&owner.protection)
                 })
     }
 

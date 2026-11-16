@@ -5,7 +5,9 @@
 //! including records, order and birth revisions. Only genuine arrivals and
 //! controller-minted lifecycle transitions may extend that source. Ephemeral
 //! witnesses below are created by existing typed completion/handoff methods,
-//! cloned with their owner, pruned with covered membership and never serialized.
+//! cloned with their owner and never serialized. Covered execution closures
+//! survive only while an original protection allocation is still held; other
+//! covered witnesses are pruned with membership.
 //! Thus descriptive checkpoint metadata cannot itself retire protected source.
 
 use super::*;
@@ -30,7 +32,7 @@ pub(super) struct ReplaySourceLifecycle {
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct ReplayExecutionClosure {
     pub(super) frontier: ContextEventSequence,
-    pub(super) protection: ContextExecutionProtection,
+    pub(super) protection: super::super::pending::ContextExecutionProtectionWitness,
 }
 
 impl ReplayEpochContext {
@@ -169,7 +171,9 @@ impl ReplayEpochContext {
                         .contains(&event.sequence()))
     }
 
-    /// Keeps ephemeral source proofs bounded by actual retained occurrences.
+    /// Bounds proofs by retained occurrences or still-held original execution
+    /// fences. Covered closures own only weak allocations, never history bodies;
+    /// the next prune removes them after their final original owner is dropped.
     pub(super) fn prune_source_lifecycle(&mut self) {
         let members = self
             .members
@@ -194,7 +198,11 @@ impl ReplayEpochContext {
         let frontiers = group_frontiers(self.context.chronology());
         let pending = &self.context.pending_execution_groups;
         self.source_lifecycle.closed_groups.retain(|group, closed| {
-            !pending.contains_key(group) && frontiers.get(group) == Some(&closed.frontier)
+            !pending.contains_key(group)
+                && match frontiers.get(group) {
+                    Some(frontier) => frontier == &closed.frontier,
+                    None => closed.protection.has_owner(),
+                }
         });
     }
 }
