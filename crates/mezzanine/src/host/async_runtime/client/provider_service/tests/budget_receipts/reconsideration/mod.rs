@@ -7,6 +7,23 @@ use crate::integrations::http::ReqwestProviderHttpTransport;
 use mez_agent::token_budget::TokenLimit;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+mod descendants;
+
+#[tokio::test]
+async fn budget_reconsideration_physical_descendant_and_root_share_finite_window() {
+    Box::pin(qualify(true, false, Contender::Descendant)).await;
+}
+
+#[tokio::test]
+async fn budget_reconsideration_physical_descendant_unlimited_preserves_concurrent_windows() {
+    Box::pin(qualify(false, false, Contender::Descendant)).await;
+}
+
+#[tokio::test]
+async fn budget_reconsideration_physical_descendant_independent_finite_root_progresses() {
+    Box::pin(qualify(true, true, Contender::Descendant)).await;
+}
+
 #[tokio::test]
 async fn budget_reconsideration_physical_title_and_memory_share_finite_window() {
     Box::pin(qualify(true, false, Contender::Memory)).await;
@@ -56,6 +73,7 @@ async fn budget_reconsideration_physical_compaction_independent_finite_roots_pro
 enum Contender {
     Memory,
     Ordinary,
+    Descendant,
     Compaction,
 }
 
@@ -127,6 +145,10 @@ async fn qualify_case(
     service.set_config_root(root.0.as_ref().unwrap().clone());
     let (mut ordinary_dispatch, mut memory, compaction) = if contender == Contender::Ordinary {
         (Some(dispatch), None, None)
+    } else if contender == Contender::Descendant {
+        let child = descendants::prepare(&mut service, &dispatch, &member).await;
+        drop(dispatch);
+        (Some(child), None, None)
     } else if contender == Contender::Compaction {
         drop(dispatch);
         service
@@ -511,7 +533,7 @@ async fn qualify_case(
                         .ok_or_else(|| "original completion missing".to_owned())?;
                     if index == 0 {
                         let successful = match contender {
-                            Contender::Ordinary => matches!(&completion.0, RuntimeEvent::AgentProvider(AgentProviderEvent::BudgetSettled { completion, .. }) if matches!(completion.as_ref(), AgentProviderEvent::Completed { .. })),
+                            Contender::Ordinary | Contender::Descendant => matches!(&completion.0, RuntimeEvent::AgentProvider(AgentProviderEvent::BudgetSettled { completion, .. }) if matches!(completion.as_ref(), AgentProviderEvent::Completed { .. })),
                             Contender::Compaction => matches!(completion.0, RuntimeEvent::AgentCompaction(AgentCompactionEvent::Completed { .. })),
                             Contender::Memory => true,
                         };
