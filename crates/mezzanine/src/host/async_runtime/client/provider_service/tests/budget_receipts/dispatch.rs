@@ -50,6 +50,7 @@ enum RequestCase {
     Macro,
     Sandbox,
     SummaryRepair,
+    ColdSummaryRepair,
 }
 
 impl RequestCase {
@@ -74,7 +75,9 @@ impl RequestCase {
             Self::Title => vec!["Title"],
             Self::Macro => vec!["MacroJudge"],
             Self::Sandbox => vec!["SandboxAssessment"],
-            Self::SummaryRepair => vec!["Execution", "FailureSummary", "FailureSummary"],
+            Self::SummaryRepair | Self::ColdSummaryRepair => {
+                vec!["Execution", "FailureSummary", "FailureSummary"]
+            }
         }
     }
 }
@@ -115,17 +118,24 @@ async fn qualify(input_limit: u64, case: RequestCase) {
 
 async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: CompactionRetirement) {
     let retire_compaction = retirement != CompactionRetirement::None;
+    let cold = matches!(case, RequestCase::ColdSummaryRepair);
+    let prepared = Box::pin(prepared_case(BudgetLimits {
+        input: TokenLimit::limited(input_limit).unwrap(),
+        output: TokenLimit::Unlimited,
+    }))
+    .await;
+    let prepared = if cold {
+        Box::pin(super::cold_summary::restore(prepared)).await
+    } else {
+        prepared
+    };
     let Prepared {
         mut service,
         mut dispatch,
         store,
         member,
         mut root,
-    } = prepared_case(BudgetLimits {
-        input: TokenLimit::limited(input_limit).unwrap(),
-        output: TokenLimit::Unlimited,
-    })
-    .await;
+    } = prepared;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     dispatch.model_profile.model = "actual-request-model".into();
@@ -475,7 +485,10 @@ async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: Com
                 attempt["purpose"].as_str().unwrap().to_string(),
                 attempt["model"]["model"].as_str().unwrap().to_string(),
             ));
-            let summary = matches!(case, RequestCase::SummaryRepair);
+            let summary = matches!(
+                case,
+                RequestCase::SummaryRepair | RequestCase::ColdSummaryRepair
+            );
             let text = if matches!(case, RequestCase::Router) {
                 serde_json::json!({"version":1,"size":"small","reasoning_effort":"high","confidence":0.9,"rationale":"fixture"}).to_string()
             } else if matches!(case, RequestCase::Title) {
@@ -546,7 +559,18 @@ async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: Com
             Box::pin(async {
                 execute_runtime_agent_provider_dispatch(dispatch, None, sender, pending.clone())
                     .await
-                    .map(|_| ())
+                    .map(|outcome| {
+                        if cold {
+                            let RuntimeAgentProviderWorkerOutcome::Execution(execution) = outcome
+                            else {
+                                panic!("cold failure summary unexpectedly routed");
+                            };
+                            assert_eq!(execution.terminal_state, mez_agent::AgentTurnState::Failed);
+                            let attempts = input_limit.div_ceil(11).min(3);
+                            assert_eq!(execution.response.usage.input_tokens, 11 * attempts);
+                            assert_eq!(execution.response.usage.output_tokens, 3 * attempts);
+                        }
+                    })
             })
         };
         let mut call = Box::pin(tokio::task::unconstrained(work));
@@ -596,6 +620,9 @@ async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: Com
         [], |row| row.get(0),
     ).unwrap();
     drop((exit, handle, pending));
+    if cold {
+        assert_eq!(outstanding, 0, "cold summary retained original exposure");
+    }
     root.cleanup();
     let served = served.expect("loopback server did not retire").unwrap();
     let (result, known, receipts, observed) = match result.unwrap() {
@@ -627,8 +654,23 @@ async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: Com
             assert_eq!(receipts, 0);
         }
     } else {
-        assert!(result.is_ok(), "production dispatch failed: {result:?}");
-        let purposes = case.purposes();
+        let mut purposes = case.purposes();
+        if cold {
+            purposes.truncate(usize::try_from(input_limit.div_ceil(11)).unwrap());
+        }
+        if cold && purposes.len() == 1 {
+            // No summary expense means the original HTTP failure remains the
+            // causal result; a budget hold must not erase or relabel it.
+            let error = result.as_ref().unwrap_err();
+            assert_eq!(error.kind(), MezErrorKind::InvalidState);
+            let failure: serde_json::Value =
+                serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();
+            assert_eq!(failure["status_code"], 400);
+            assert_eq!(error.provider_incurred_usage().input_tokens, 11);
+            assert_eq!(error.provider_incurred_usage().output_tokens, 3);
+        } else {
+            assert!(result.is_ok(), "production dispatch failed: {result:?}");
+        }
         let expected: Vec<_> = purposes
             .iter()
             .enumerate()
@@ -642,7 +684,11 @@ async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: Com
             })
             .collect();
         assert_eq!(served, expected, "{case:?}");
-        if matches!(case, RequestCase::SummaryRepair) {
+        if matches!(
+            case,
+            RequestCase::SummaryRepair | RequestCase::ColdSummaryRepair
+        ) && purposes.len() == 3
+        {
             assert_eq!(
                 observed[1],
                 (
@@ -678,4 +724,8 @@ async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: Com
     if let Some(isolated) = held_isolation {
         assert!(isolated, "{case:?} held owner borrowed ordinary authority");
     }
+}
+
+pub(super) async fn qualify_cold_summary(input: u64) {
+    Box::pin(qualify(input, RequestCase::ColdSummaryRepair)).await;
 }

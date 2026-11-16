@@ -3,6 +3,7 @@
 //! staged bridge does not claim production activation or retirement release.
 
 mod admission;
+mod cold_summary;
 mod compaction_wait;
 mod compaction_waves;
 mod completion_wait;
