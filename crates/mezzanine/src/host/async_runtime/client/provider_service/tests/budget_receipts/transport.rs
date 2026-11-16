@@ -252,6 +252,10 @@ enum UnaryUsage {
     RegressedThenCancel,
     MissingChoiceIndex,
     ExcessChoices,
+    MultipleChoicesComplete,
+    MultipleChoicesPending,
+    LatePendingChoice,
+    UsageBeforeLastChoice,
     MissingCacheFields,
     PartialInputChange,
     AnthropicConflict,
@@ -315,6 +319,9 @@ impl UnaryUsage {
             | Self::DoneOnly
             | Self::MissingChoiceIndex
             | Self::ExcessChoices
+            | Self::MultipleChoicesPending
+            | Self::LatePendingChoice
+            | Self::UsageBeforeLastChoice
             | Self::ConflictingFinal
             | Self::ConflictingFinalRepeat
             | Self::NonregressingConflict => (None, None),
@@ -557,6 +564,23 @@ async fn budget_wire_loopback_deepseek_stream_finality_and_cancellation() {
     }
 }
 
+/// Multiple output choices share one request expense, but all observed choices
+/// must finish before the report can qualify complete primary dimensions. A
+/// late unfinished choice invalidates prior finality without losing its cost.
+#[tokio::test]
+async fn budget_wire_loopback_chat_multiple_and_late_choices_preserve_finality() {
+    for dialect in [WireDialect::Chat, WireDialect::DeepSeek] {
+        for usage in [
+            UnaryUsage::MultipleChoicesComplete,
+            UnaryUsage::MultipleChoicesPending,
+            UnaryUsage::LatePendingChoice,
+            UnaryUsage::UsageBeforeLastChoice,
+        ] {
+            qualify_dialect_usage(false, true, false, false, 0, usage, dialect).await;
+        }
+    }
+}
+
 async fn qualify_dialect_usage(
     responses: bool,
     stream: bool,
@@ -723,6 +747,23 @@ async fn qualify_dialect_usage(
                         .push(serde_json::json!({"index":index,"delta":{},"finish_reason":"stop"}));
                 }
             }
+            if matches!(
+                usage_case,
+                UnaryUsage::MultipleChoicesComplete
+                    | UnaryUsage::MultipleChoicesPending
+                    | UnaryUsage::UsageBeforeLastChoice
+            ) {
+                prefix["choices"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"index":1,"delta":{},"finish_reason":null}));
+                if matches!(usage_case, UnaryUsage::MultipleChoicesComplete) {
+                    finish["choices"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!({"index":1,"delta":{},"finish_reason":"stop"}));
+                }
+            }
             let usage = if matches!(usage_case, UnaryUsage::MissingFinalUsage) {
                 serde_json::json!({})
             } else if matches!(
@@ -739,6 +780,13 @@ async fn qualify_dialect_usage(
             let mut data = format!("data: {prefix}\n\n");
             if !cancel || matches!(usage_case, UnaryUsage::RegressedThenCancel) {
                 data.push_str(&format!("data: {finish}\n\ndata: {terminal}\n\n"));
+                if matches!(
+                    usage_case,
+                    UnaryUsage::LatePendingChoice | UnaryUsage::UsageBeforeLastChoice
+                ) {
+                    let late = serde_json::json!({"choices":[{"index":1,"delta":{},"finish_reason":if matches!(usage_case, UnaryUsage::LatePendingChoice) { None } else { Some("stop") }}]});
+                    data.push_str(&format!("data: {late}\n\n"));
+                }
                 if matches!(
                     usage_case,
                     UnaryUsage::ConflictingFinal
@@ -1158,6 +1206,7 @@ async fn qualify_dialect_usage(
                     | UnaryUsage::Cancelled
                     | UnaryUsage::ConflictingFinal
                     | UnaryUsage::NonregressingConflict
+                    | UnaryUsage::LatePendingChoice
                     | UnaryUsage::AnthropicConflict
             ) || (!anthropic && matches!(usage_case, UnaryUsage::DoneOnly))
                 || (responses && matches!(usage_case, UnaryUsage::Nonterminal))
