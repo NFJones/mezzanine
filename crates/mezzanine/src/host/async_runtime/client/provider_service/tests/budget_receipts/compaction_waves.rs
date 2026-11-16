@@ -87,6 +87,21 @@ enum HoldControl {
     Stop,
     StopIssued,
     StopPartial,
+    Active,
+    ActiveRelease,
+}
+
+#[tokio::test]
+async fn budget_recursive_compaction_active_context_rejection_resumes_original_turn() {
+    Box::pin(qualify(
+        false,
+        BudgetLimits {
+            input: mez_agent::token_budget::TokenLimit::Limited(1_000_000),
+            output: mez_agent::token_budget::TokenLimit::Limited(1_000_000),
+        },
+        Some(HoldControl::Active),
+    ))
+    .await;
 }
 
 /// A captured prefix is not terminal transport/receipt evidence: a held sibling
@@ -108,14 +123,28 @@ fn crossing_limits() -> BudgetLimits {
     }
 }
 
+#[tokio::test]
+async fn budget_recursive_compaction_active_equality_release_resumes_original_turn() {
+    Box::pin(qualify(
+        false,
+        crossing_limits(),
+        Some(HoldControl::ActiveRelease),
+    ))
+    .await;
+}
+
 async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldControl>) {
+    let active = matches!(
+        control,
+        Some(HoldControl::Active | HoldControl::ActiveRelease)
+    );
     let partial = matches!(control, Some(HoldControl::StopPartial));
     let stop_issued = matches!(
         control,
         Some(HoldControl::StopIssued | HoldControl::StopPartial)
     );
     let stop_held = match control {
-        Some(HoldControl::Release) => Some(false),
+        Some(HoldControl::Release | HoldControl::ActiveRelease) => Some(false),
         Some(HoldControl::Stop) => Some(true),
         _ => None,
     };
@@ -144,7 +173,7 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
         service
             .replace_config_layers(vec![layer(1_000_000)])
             .unwrap();
-        crate::test_support::compaction_source::complete_task_and_admit_successor(
+        let successor = crate::test_support::compaction_source::complete_task_and_admit_successor(
             &mut service,
             &primary,
             &"frozen manual source ".repeat(40_000),
@@ -152,19 +181,57 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
             "continue after historical task",
             mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
         );
-        service
-            .execute_agent_shell_command(&primary, "/stop")
-            .unwrap();
-        service.replace_config_layers(vec![layer(20_000)]).unwrap();
-        service
-            .execute_agent_shell_command(&primary, "/compact")
-            .unwrap();
-        service
+        let original_turn = if active {
+            crate::test_support::compaction_source::complete_task(
+                &mut service,
+                &successor,
+                "completed intermediate task",
+                mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+            );
+            service.replace_config_layers(vec![layer(20_000)]).unwrap();
+            service
+                .execute_agent_shell_command(&primary, "continue original active task")
+                .unwrap();
+            let turn = service
+                .agent_shell_store()
+                .get("%1")
+                .unwrap()
+                .running_turn_id
+                .clone()
+                .unwrap();
+            let error = MezError::invalid_state("provider context length exceeded")
+                .with_provider_failure_json(
+                    r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+                );
+            assert!(
+                service
+                    .schedule_agent_provider_retry_transition(
+                        &AgentId::opaque("agent-%1").unwrap(),
+                        &turn,
+                        ProviderErrorRetryClass::ContextLimit,
+                        &error,
+                    )
+                    .unwrap()
+                    .is_some()
+            );
+            Some(turn)
+        } else {
+            service
+                .execute_agent_shell_command(&primary, "/stop")
+                .unwrap();
+            service.replace_config_layers(vec![layer(20_000)]).unwrap();
+            service
+                .execute_agent_shell_command(&primary, "/compact")
+                .unwrap();
+            None
+        };
+        let generation = service
             .pending_agent_compaction_task_generation("%1")
-            .unwrap()
+            .unwrap();
+        (generation, original_turn)
     }));
-    let first = match setup {
-        Ok(first) => first,
+    let (first, original_turn) = match setup {
+        Ok(prepared) => prepared,
         Err(panic) => {
             service.terminate_all_pane_processes().unwrap();
             drop((service, transcripts, store));
@@ -185,6 +252,8 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
     let physical_issued = issued.clone();
     let lane_wait = Arc::new(tokio::sync::Notify::new());
     let prefix_witness = Arc::new(tokio::sync::Notify::new());
+    let ordinary = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ordinary_request = ordinary.clone();
     let mut server = tokio::spawn(async move {
         // The same server task owns both sockets. For unlimited policy, do
         // not answer the first request until a second complete physical
@@ -263,9 +332,18 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                 physical_issued.notify_one();
                 std::future::pending::<()>().await;
             }
+            let content = if ordinary_request.load(Ordering::SeqCst) {
+                let request = String::from_utf8_lossy(&bytes);
+                assert!(request.contains("one final manual head"));
+                assert!(!request.contains("frozen manual source frozen manual source"));
+                serde_json::json!({"rationale":"fixture","actions":[{"type":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"original active task completed"}]}).to_string()
+            } else {
+                "one final manual head".into()
+            };
             let body = serde_json::json!({"model":"test-model","choices":[{
-                "index":0,"finish_reason":"stop","message":{"role":"assistant","content":"one final manual head"}
-            }],"usage":{"prompt_tokens":11,"completion_tokens":3}}).to_string();
+                "index":0,"finish_reason":"stop","message":{"role":"assistant","content":content}
+            }],"usage":{"prompt_tokens":11,"completion_tokens":3}})
+            .to_string();
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
@@ -635,6 +713,66 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                         .await?;
                         assert_eq!(again.failed, 0);
                         assert_eq!(accepted_heads(&handle).await?, 1);
+                        if let Some(turn) = &original_turn {
+                            let tasks = handle.pending_agent_provider_tasks().await?;
+                            assert_eq!(tasks.len(), 1, "one original continuation after adoption");
+                            assert_eq!(&tasks[0].turn_id, turn);
+                            let agent = AgentId::opaque(tasks[0].agent_id.clone()).unwrap();
+                            let mut resumed = handle.claim_configured_agent_provider_task(agent.clone(), turn.clone()).await?
+                                .ok_or_else(|| MezError::invalid_state("original active continuation not claimable"))?;
+                            assert_eq!(resumed.budget_owner.as_ref().unwrap().member.root, member.root);
+                            resumed.provider = crate::runtime::RuntimeAgentProviderDispatchProvider::OpenAiCompatible(
+                                OpenAiCompatibleChatCompletionsProvider::without_auth(ReqwestProviderHttpTransport)?
+                                    .with_provider_id("local-chat")?.with_streaming_options_for_test(false)?
+                                    .with_endpoint(endpoint.clone()),
+                            );
+                            ordinary.store(true, Ordering::SeqCst);
+                            let before_send = calls.load(Ordering::SeqCst);
+                            let owner = ProviderWorkerOwner::inference(agent.clone(), &resumed);
+                            assert!(spawn_owned_agent_provider_worker(
+                                &mut workers, &mut owners, Some(owner),
+                                monitor_runtime_agent_provider_dispatch(handle.clone(), agent, turn.clone(), resumed, drains.clone()),
+                            ).is_some());
+                            let joined = tokio::time::timeout(Duration::from_secs(30), workers.join_next_with_id()).await
+                                .map_err(|_| MezError::invalid_state("original continuation observation deadline"))?
+                                .ok_or_else(|| MezError::invalid_state("original continuation monitor unavailable"))?;
+                            let Ok((_, Ok(Some((RuntimeEvent::AgentProvider(crate::runtime::AgentProviderEvent::BudgetSettled { completion, settlement }), _))))) = &joined else {
+                                panic!("original continuation lacks its budget-settled result");
+                            };
+                            assert!(matches!(completion.as_ref(), crate::runtime::AgentProviderEvent::Completed { turn_id, .. } if turn_id == turn));
+                            assert!(settlement.matches_result(completion));
+                            let (first, released) = settlement.observations();
+                            assert_eq!(first.known, released.known);
+                            assert_eq!(released.known, UsageTotals {
+                                input: (before_send as u64 + 1) * 11,
+                                output: (before_send as u64 + 1) * 3,
+                            });
+                            record_owned_agent_provider_worker(joined, &handle, &mut report, &mut owners, &drains).await?;
+                            assert_eq!(calls.load(Ordering::SeqCst), before_send + 1);
+                            assert_eq!(store.budget_account(&member.root)?.known, UsageTotals {
+                                input: (before_send as u64 + 1) * 11,
+                                output: (before_send as u64 + 1) * 3,
+                            });
+                            // Provider completion is not archive completion.
+                            // Adopt original required writes before requiring
+                            // final turn retirement, never synthesize an ACK.
+                            for _ in 0..16 {
+                                let settled = run_async_persistence_side_effect_service(
+                                    &handle,
+                                    AsyncRuntimeSideEffectServiceConfig {
+                                        max_polls: 1, drain_limit: 64,
+                                        idle_interval: Duration::from_millis(1),
+                                    },
+                                    |_, _| true,
+                                ).await?;
+                                assert_eq!(settled.failed, 0);
+                                if !handle.agent_turn_is_running(turn).await? { break; }
+                            }
+                            assert!(!handle.agent_turn_is_running(turn).await?);
+                            assert!(handle.claim_configured_agent_provider_task(
+                                AgentId::opaque("agent-%1").unwrap(), turn.clone(),
+                            ).await?.is_none(), "completed original continuation cannot be claimed twice");
+                        }
                         assert!(handle.pending_agent_provider_tasks().await?.is_empty());
                         assert!(
                             handle
@@ -713,6 +851,13 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
     );
     assert_eq!(claims as usize, count);
     assert!(count > 0);
+    if let Some(turn) = &original_turn {
+        assert_eq!(
+            exit.service.agent_turn_ledger().turn(turn).unwrap().state,
+            mez_agent::AgentTurnState::Completed,
+            "the original continuation must succeed, not merely retire"
+        );
+    }
     if stop_issued {
         assert_eq!(
             store.budget_account(&original_member.root).unwrap().known,
