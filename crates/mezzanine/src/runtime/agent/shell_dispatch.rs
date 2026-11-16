@@ -242,7 +242,7 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         self.ensure_completion_admission_open()?;
-        if self.agent_turn_is_human_paused(turn_id) {
+        if self.agent_turn_is_human_paused(turn_id) || self.budget_activity_inhibits_turn(turn_id) {
             return Ok(None);
         }
         let identity = (turn_id.to_string(), action_id.to_string());

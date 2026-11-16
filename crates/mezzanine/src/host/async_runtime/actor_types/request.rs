@@ -1029,6 +1029,27 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Captures a bounded root-policy read without doing actor filesystem I/O.
+    PrepareBudgetActivityRead {
+        turn_id: String,
+        reply: oneshot::Sender<crate::runtime::RuntimeBudgetActivityPreparation>,
+    },
+    /// Adopts only the original live read; never grants an effect or requeues work.
+    ApplyBudgetActivityRead {
+        read: Box<crate::runtime::RuntimeBudgetActivityRead>,
+        reply: oneshot::Sender<bool>,
+    },
+    /// Retains a joined reader failure under its exact original allocation/token.
+    FailBudgetActivityRead {
+        failure: crate::runtime::RuntimeBudgetActivityFailure,
+        reply: oneshot::Sender<bool>,
+    },
+    #[cfg(test)]
+    InjectBudgetActivityFault {
+        turn_id: String,
+        panic_reader: bool,
+        reply: oneshot::Sender<()>,
+    },
     /// Read-only acceptance observation; not a production task or authority port.
     #[cfg(test)]
     BudgetTitleClaimIsQuiescent {
@@ -1828,6 +1849,9 @@ impl AsyncRuntimeRequest {
             | Self::CompleteBookkeepingCandidate { .. }
             | Self::PendingAgentProviderTasks { .. }
             | Self::AgentTurnIsRunning { .. }
+            | Self::PrepareBudgetActivityRead { .. }
+            | Self::ApplyBudgetActivityRead { .. }
+            | Self::FailBudgetActivityRead { .. }
             | Self::ParkBudgetAuxiliaryClaim { .. }
             | Self::ResumeBudgetAuxiliaryClaim { .. }
             | Self::SelectBudgetReconsideration { .. }
@@ -1875,6 +1899,8 @@ impl AsyncRuntimeRequest {
             Self::RecordClaimedAgentProviderTaskForTests { .. } => Family::Provider,
             #[cfg(test)]
             Self::BudgetTitleClaimIsQuiescent { .. } => Family::Provider,
+            #[cfg(test)]
+            Self::InjectBudgetActivityFault { .. } => Family::Provider,
             #[cfg(test)]
             Self::BudgetRememberClaimIsQuiescent { .. } => Family::Provider,
             #[cfg(test)]

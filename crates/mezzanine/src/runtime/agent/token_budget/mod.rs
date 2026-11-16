@@ -21,6 +21,7 @@ use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::token_usage::budget::membership::BudgetMembership;
 use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 
+pub(crate) mod activity;
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "physical-send admission assembly remains staged")
@@ -129,7 +130,13 @@ pub(crate) struct RuntimeBudgetMemberships {
     /// ordinary production resume/fork or pretend to enforce finite limits.
     enabled: bool,
     entries: BTreeMap<String, Entry>,
+    /// Bounded descriptive root inhibition, never cached effect authorization.
+    activity: BTreeMap<activity::RootKey, activity::RootActivity>,
+    /// At most one diagnosed capture refusal per existing membership entry.
+    activity_capture_failures: BTreeMap<String, activity::CaptureFailure>,
     provider_waits: BTreeMap<String, provider_wait::ProviderWait>,
+    #[cfg(test)]
+    activity_fault: Option<(String, bool)>,
     /// Ordering only; actual ready title custody stays in its original claim.
     next_title_ready_order: u64,
     /// Weak ordering metadata only; original claims keep all runnable custody.

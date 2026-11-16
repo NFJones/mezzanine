@@ -758,7 +758,7 @@ impl RuntimeSessionService {
         if self.completion_finalization_holds_new_work() {
             return Ok(None);
         }
-        if self.agent_turn_is_human_paused(turn_id) {
+        if self.agent_turn_is_human_paused(turn_id) || self.budget_activity_inhibits_turn(turn_id) {
             return Ok(None);
         }
         let Some(turn) = self

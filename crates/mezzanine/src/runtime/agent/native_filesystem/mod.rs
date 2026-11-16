@@ -232,6 +232,7 @@ impl RuntimeSessionService {
         };
         if self.agent_provider_failure_is_refused(&work.owner.turn.turn_id)
             || self.agent_turn_is_human_paused(&work.owner.turn.turn_id)
+            || self.budget_activity_inhibits_turn(&work.owner.turn.turn_id)
             || self
                 .agent
                 .pending_agent_provider_persistence

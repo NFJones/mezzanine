@@ -802,10 +802,19 @@ impl RuntimeSessionService {
         }
         let mut started = 0usize;
         let startup_blocked_panes = self.runtime_agent_surface_blocked_panes();
+        let budget_blocked_turns = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .filter(|turn| self.budget_activity_inhibits_turn(&turn.turn_id))
+            .map(|turn| turn.turn_id.clone())
+            .collect::<std::collections::HashSet<_>>();
         while let Some(running) = self.agent.agent_scheduler.start_ready_where(|work| {
-            work.pane_id
-                .as_ref()
-                .is_none_or(|pane_id| !startup_blocked_panes.contains(pane_id))
+            !budget_blocked_turns.contains(&work.turn_id)
+                && work
+                    .pane_id
+                    .as_ref()
+                    .is_none_or(|pane_id| !startup_blocked_panes.contains(pane_id))
         }) {
             let Some(turn) = self
                 .agent_turn_ledger()

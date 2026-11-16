@@ -3199,6 +3199,29 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(Ok(self.service.budget_initial_admission_contended(&work)));
                 false
             }
+            AsyncRuntimeRequest::PrepareBudgetActivityRead { turn_id, reply } => {
+                let _ = reply.send(self.service.prepare_budget_activity_claim(&turn_id));
+                false
+            }
+            AsyncRuntimeRequest::ApplyBudgetActivityRead { read, reply } => {
+                let _ = reply.send(self.service.apply_budget_activity_read(*read));
+                false
+            }
+            AsyncRuntimeRequest::FailBudgetActivityRead { failure, reply } => {
+                let _ = reply.send(self.service.fail_budget_activity_read(failure));
+                false
+            }
+            #[cfg(test)]
+            AsyncRuntimeRequest::InjectBudgetActivityFault {
+                turn_id,
+                panic_reader,
+                reply,
+            } => {
+                self.service
+                    .inject_budget_activity_fault(turn_id, panic_reader);
+                let _ = reply.send(());
+                false
+            }
             AsyncRuntimeRequest::ResumeBudgetAuxiliaryClaim { capture, reply } => {
                 let result = if capture.compaction_subject().is_some() {
                     if self.available_committed_side_effect_capacity() < 2 {

@@ -1216,12 +1216,61 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Reobserves coherent known expense/policy through the original binding.
+    /// This read is not a permit: the actor still validates the current effect
+    /// owner, and another same-root outstanding query keeps claims inhibited.
+    pub(crate) async fn reconcile_budget_activity(&self, turn_id: &str) -> Result<bool> {
+        let preparation = self
+            .request(|reply| AsyncRuntimeRequest::PrepareBudgetActivityRead {
+                turn_id: turn_id.to_owned(),
+                reply,
+            })
+            .await?;
+        let work = match preparation {
+            crate::runtime::RuntimeBudgetActivityPreparation::Disabled => return Ok(true),
+            crate::runtime::RuntimeBudgetActivityPreparation::Refused => return Ok(false),
+            crate::runtime::RuntimeBudgetActivityPreparation::Read(work) => work,
+        };
+        let failure = work.failure_capture();
+        match tokio::task::spawn_blocking(move || work.execute()).await {
+            Ok(read) => {
+                self.request(|reply| AsyncRuntimeRequest::ApplyBudgetActivityRead { read, reply })
+                    .await
+            }
+            Err(_) => {
+                self.request(|reply| AsyncRuntimeRequest::FailBudgetActivityRead {
+                    failure,
+                    reply,
+                })
+                .await?;
+                Ok(false)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn inject_budget_activity_fault(
+        &self,
+        turn_id: String,
+        panic_reader: bool,
+    ) -> Result<()> {
+        self.request(|reply| AsyncRuntimeRequest::InjectBudgetActivityFault {
+            turn_id,
+            panic_reader,
+            reply,
+        })
+        .await
+    }
+
     /// Claims one approved network or MCP action for worker execution.
     pub async fn claim_approved_external_action(
         &self,
         turn_id: String,
         action_id: String,
     ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
+        if !self.reconcile_budget_activity(&turn_id).await? {
+            return Ok(None);
+        }
         self.request(|reply| AsyncRuntimeRequest::ClaimApprovedExternalAction {
             turn_id,
             action_id,
@@ -1236,6 +1285,9 @@ impl AsyncRuntimeSessionHandle {
         turn_id: String,
         action_id: String,
     ) -> Result<Option<RuntimeNativeShellDispatch>> {
+        if !self.reconcile_budget_activity(&turn_id).await? {
+            return Ok(None);
+        }
         self.request(|reply| AsyncRuntimeRequest::ClaimNativeShellAction {
             turn_id,
             action_id,

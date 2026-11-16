@@ -2,6 +2,7 @@
 //! Admission is explicitly prepared before the fake physical exchange; this
 //! staged bridge does not claim production activation or retirement release.
 
+mod activity_service;
 mod admission;
 mod cold_summary;
 mod compaction_wait;

@@ -16630,6 +16630,23 @@ retired turn identities MUST NOT retain wake debt. This per-turn scheduling port
 does not establish immutable root membership, fresh policy authority, effect
 admission, or policy-driven release, and MUST NOT activate production budgets.
 
+The staged root activity observer MAY capture an already activated native binding
+and perform one coalesced read per namespace/root off actor. Adoption MUST match
+the original membership allocation, repository and query lifetime; a stale read
+MUST NOT project into a replacement conversation. Pending, unavailable and numeric
+exhaustion MUST remain distinct facts, and failed reads MUST NOT invent zero usage.
+Observed root inhibition MUST fence ready selection, provider readiness and queued
+native-shell, filesystem and approved-external claims without cancelling original
+issued outcomes. Native-shell and approved-external handle claims MUST first
+reobserve their original binding. Clearing an observed reason MUST NOT itself
+requeue a turn or execute an old approved candidate. Root-local capture refusal
+or joined reader failure MUST withhold the affected claim without tearing down
+shared provider work; loss of the actor transport remains an independent error.
+These reads are descriptive:
+they do not serialize a later effect claim with another process's policy/expense
+commit, prove draining/quiescence, fence every inline action, or implement automatic
+release. Those boundaries remain required before production budget activation.
+
 Telemetry schema16 adds a config-derived budget projection and exact publication
 receipts without replacing lifetime accounts. The primary config MUST remain the
 only authored global policy. An uninitialized, updating or conflicted projection

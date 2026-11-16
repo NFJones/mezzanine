@@ -28,6 +28,20 @@ async fn budget_completed_response_adopts_and_executes_original_native_candidate
     Box::pin(qualify(CompletionCase::Adopt)).await;
 }
 
+/// A previously offered action is not an issued effect. Lowering after response
+/// adoption must fence the real native claim, retaining it for a sufficient edit.
+#[tokio::test]
+async fn budget_completed_response_prepared_native_claim_rechecks_lowered_policy() {
+    Box::pin(qualify(CompletionCase::ClaimRecross)).await;
+}
+
+#[tokio::test]
+async fn budget_completed_response_capture_and_reader_refusal_retain_original_native_offer() {
+    for mode in [CompletionCase::CaptureRefusal, CompletionCase::ReaderPanic] {
+        Box::pin(qualify(mode)).await;
+    }
+}
+
 #[tokio::test]
 async fn budget_completed_response_stop_after_producer_release_refuses_actor_adoption() {
     Box::pin(qualify(CompletionCase::StopBeforeAdoption)).await;
@@ -68,6 +82,9 @@ enum CompletionCase {
     Stop,
     ReadFailure,
     Adopt,
+    ClaimRecross,
+    CaptureRefusal,
+    ReaderPanic,
     StopBeforeAdoption,
     EnvelopeRefusal,
     PayloadRefusal,
@@ -89,6 +106,9 @@ async fn qualify(mode: CompletionCase) {
     let adopt = matches!(
         mode,
         CompletionCase::Adopt
+            | CompletionCase::ClaimRecross
+            | CompletionCase::CaptureRefusal
+            | CompletionCase::ReaderPanic
             | CompletionCase::StopBeforeAdoption
             | CompletionCase::EnvelopeRefusal
             | CompletionCase::PayloadRefusal
@@ -438,6 +458,32 @@ async fn qualify(mode: CompletionCase) {
                 }).collect::<Vec<_>>();
                 if offers.len() != usize::from(expected) { return Err(format!("native candidate offers: expected {expected}, got {}", offers.len())); }
                 if let Some(action) = offers.first() {
+                    if matches!(mode, CompletionCase::CaptureRefusal | CompletionCase::ReaderPanic) {
+                        handle.inject_budget_activity_fault(turn.clone(), mode == CompletionCase::ReaderPanic).await.unwrap();
+                        if handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap().is_some() {
+                            return Err("unavailable budget qualification granted native action".to_owned());
+                        }
+                        if counter.exists() { return Err("refused original offer executed".to_owned()); }
+                        if !handle.agent_turn_is_running(&turn).await.unwrap() {
+                            return Err("local budget qualification terminalized original owner".to_owned());
+                        }
+                    }
+                    if mode == CompletionCase::ClaimRecross {
+                        super::remember_retirement::publish_policy(&store, "claim-recross", 'e', BudgetLimits {
+                            input: TokenLimit::Limited(11), output: TokenLimit::Limited(3),
+                        }).await;
+                        if handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap().is_some() {
+                            return Err("prepared native action claimed after budget recross".to_owned());
+                        }
+                        if counter.exists() { return Err("unclaimed native candidate executed".to_owned()); }
+                        super::remember_retirement::publish_policy(&store, "claim-insufficient", 'f', BudgetLimits {
+                            input: TokenLimit::Unlimited, output: TokenLimit::Limited(3),
+                        }).await;
+                        if handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap().is_some() {
+                            return Err("one exhausted dimension did not retain native candidate".to_owned());
+                        }
+                        super::remember_retirement::publish_policy(&store, "claim-sufficient", 'a', BudgetLimits::default()).await;
+                    }
                     let native = handle.claim_native_shell_action(turn.clone(), action.clone()).await.unwrap()
                         .ok_or_else(|| "original native offer did not claim".to_owned())?;
                     if mode == CompletionCase::MonitorError {

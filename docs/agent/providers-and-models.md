@@ -356,6 +356,19 @@ keep their order and admission charge, and retired turns retain no budget wake
 metadata. This internal per-turn port is not root-qualified policy publication,
 an effect permit, or automatic budget-driven resumption.
 
+The staged activity observer additionally qualifies an existing native binding and
+coalesces one off-actor policy/expense read per accounting namespace/root. Its
+observed hold follows captured descendant membership, not pane or depth labels.
+Pending/unavailable reads inhibit without fabricating numeric exhaustion; stale
+outcomes cannot update a replacement conversation. Native-shell and approved
+external handle claims reobserve before their normal actor claim, while known
+root holds also fence provider readiness, ready selection and filesystem claims.
+Capture refusal or a joined reader failure withholds the original offer locally,
+without aborting unrelated provider workers. Actor transport loss is still an
+error. Original issued settlement remains separate. A clear observation is not an effect
+permit or automatic wake: cross-process commit/claim serialization, all inline
+action boundaries, drain proof and qualified release remain unfinished.
+
 These internal allocation and accounting ports do **not** yet enable operational
 session budgets. The provider waiting, accounting and retirement paths above must
 still be assembled with root-wide activity inhibition and persistent policy/UI
