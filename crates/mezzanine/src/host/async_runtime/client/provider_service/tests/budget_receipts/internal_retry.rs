@@ -6,7 +6,10 @@ use crate::host::async_runtime::client::provider_service::budget_admission::Budg
 use crate::integrations::agent::provider::{
     DeepSeekChatCompletionsProvider, ProviderObservationReceiptSource,
 };
+use crate::integrations::http::ReqwestProviderHttpTransport;
+use futures_util::FutureExt;
 use mez_agent::token_budget::TokenLimit;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Observe allocation order without introducing another custody owner. The
 /// production source still creates and retains every native descriptor.
@@ -31,46 +34,80 @@ impl ProviderObservationReceiptSource for CountedSource {
     }
 }
 
-struct RetryTransport {
+/// Count complete physical submissions, not adapter calls. One owned task
+/// retains every socket and is aborted/joined before fixture cleanup.
+async fn serve(
+    listener: tokio::net::TcpListener,
     calls: Arc<AtomicUsize>,
     store: TokenUsageStore,
-}
-
-impl AsyncProviderHttpTransport for RetryTransport {
-    fn send_async<'a>(
-        &'a self,
-        _: &'a mez_agent::ProviderHttpRequest,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = mez_agent::ProviderHttpResult<mez_agent::ProviderHttpResponse>>
-                + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            let index = self.calls.fetch_add(1, Ordering::SeqCst);
-            assert!(index < 2);
-            assert_eq!(rows(&self.store, "budget_admissions"), (index + 1) as i64);
-            assert_eq!(rows(&self.store, "budget_receipts"), (index * 2) as i64);
-            let message = if index == 0 {
-                serde_json::json!({"role":"assistant", "content":"I can help.", "reasoning_content":"thinking"})
-            } else {
-                serde_json::json!({"role":"assistant", "content":"", "tool_calls":[{
-                    "id":"call_1", "type":"function", "function":{
-                        "name":mez_agent::DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
-                        "arguments":serde_json::json!({"rationale":"fixture","status":"final","text":"done"}).to_string()
-                    }
-                }]})
-            };
-            Ok(mez_agent::ProviderHttpResponse {
-                status_code: 200,
-                headers: Default::default(),
-                body:
-                    serde_json::json!({"model":"deepseek-v4-pro", "choices":[{"message":message}],
-                    "usage":{"prompt_tokens":10 + index * 2, "completion_tokens":4 + index * 2}})
-                    .to_string(),
-            })
-        })
+    root: mez_agent::token_budget::BudgetRootId,
+) -> Result<()> {
+    loop {
+        let (mut socket, _) = listener.accept().await?;
+        let mut bytes = Vec::new();
+        loop {
+            let mut buffer = [0; 8192];
+            let count = socket.read(&mut buffer).await?;
+            if count == 0 || bytes.len() + count > 1024 * 1024 {
+                return Err(MezError::invalid_state(
+                    "internal retry HTTP request incomplete or oversized",
+                ));
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&bytes[..end]);
+                let length: usize = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                    .ok_or_else(|| {
+                        MezError::invalid_state("internal retry request length unavailable")
+                    })?
+                    .1
+                    .trim()
+                    .parse()
+                    .map_err(|_| {
+                        MezError::invalid_state("internal retry request length invalid")
+                    })?;
+                if bytes.len() >= end + 4 + length {
+                    break;
+                }
+            }
+        }
+        let index = calls.fetch_add(1, Ordering::SeqCst);
+        assert!(index < 2);
+        assert_eq!(rows(&store, "budget_admissions"), (index + 1) as i64);
+        assert_eq!(rows(&store, "budget_receipts"), (index * 2) as i64);
+        assert_eq!(
+            store.budget_account(&root)?.known,
+            UsageTotals {
+                input: index as u64 * 10,
+                output: index as u64 * 4,
+            }
+        );
+        let outstanding: i64 = rusqlite::Connection::open(store.path())?.query_row(
+            "SELECT COUNT(*) FROM budget_admissions WHERE retired_receipt IS NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            outstanding, 1,
+            "internal retry preceded original retirement"
+        );
+        let message = if index == 0 {
+            serde_json::json!({"role":"assistant", "content":"I can help.", "reasoning_content":"thinking"})
+        } else {
+            serde_json::json!({"role":"assistant", "content":"", "tool_calls":[{
+                "id":"call_1", "type":"function", "function":{
+                    "name":mez_agent::DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
+                    "arguments":serde_json::json!({"rationale":"fixture","status":"final","text":"done"}).to_string()
+                }
+            }]})
+        };
+        let body = serde_json::json!({"model":"deepseek-v4-pro", "choices":[{"message":message}],
+                "usage":{"prompt_tokens":10 + index * 2, "completion_tokens":4 + index * 2}})
+        .to_string();
+        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
     }
 }
 
@@ -123,14 +160,18 @@ async fn qualify(limits: BudgetLimits, allowed: bool) {
         mut root,
     } = prepared_case(limits).await;
     let calls = Arc::new(AtomicUsize::new(0));
-    let provider = DeepSeekChatCompletionsProvider::new(
-        "fixture-key",
-        RetryTransport {
-            calls: calls.clone(),
-            store: store.clone(),
-        },
-    )
-    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/chat/completions", listener.local_addr().unwrap());
+    let mut server = tokio::spawn(serve(
+        listener,
+        calls.clone(),
+        store.clone(),
+        member.root.clone(),
+    ));
+    let provider = DeepSeekChatCompletionsProvider::without_auth(ReqwestProviderHttpTransport)
+        .unwrap()
+        .with_endpoint(endpoint)
+        .with_stream(false);
     let mut request = crate::integrations::agent::context::assemble_model_request(
         &dispatch.model_profile,
         provider.api_compatibility(),
@@ -215,15 +256,26 @@ async fn qualify(limits: BudgetLimits, allowed: bool) {
         )
     };
     let control = async {
-        let result = tokio::time::timeout(Duration::from_secs(10), client).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            std::panic::AssertUnwindSafe(client).catch_unwind(),
+        )
+        .await;
+        server.abort();
+        let server_result = tokio::time::timeout(Duration::from_secs(5), &mut server).await;
         handle.shutdown().await.unwrap();
-        result
+        (result, server_result)
     };
-    let (result, mut exit) = tokio::join!(control, actor.run());
+    let ((result, server_result), mut exit) = tokio::join!(control, actor.run());
     exit.service.terminate_all_pane_processes().unwrap();
     drop((exit, observer, factory, dispatch, provider, handle, pending));
-    root.cleanup();
-    let (result, sends, receipts, exposure, known) = result.unwrap();
+    assert!(
+        matches!(server_result, Ok(Err(error)) if error.is_cancelled()),
+        "original HTTP server did not retire cleanly"
+    );
+    let (result, sends, receipts, exposure, known) = result
+        .unwrap()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     if allowed {
         assert!(
             result.is_ok(),
@@ -251,4 +303,9 @@ async fn qualify(limits: BudgetLimits, allowed: bool) {
             }
         );
     }
+    let outstanding: i64 = rusqlite::Connection::open(store.path()).unwrap().query_row(
+        "SELECT COUNT(*) FROM (SELECT id FROM budget_attempts WHERE terminal=0 UNION SELECT attempt FROM budget_admissions WHERE retired_receipt IS NULL)", [], |row| row.get(0)).unwrap();
+    assert_eq!(outstanding, 0);
+    drop((store, server));
+    root.cleanup();
 }
