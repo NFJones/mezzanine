@@ -7,6 +7,46 @@ use crate::storage::token_usage::budget::policy_projection::*;
 use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 use mez_agent::token_budget::{BudgetLimits, BudgetOverride, TokenLimit};
 
+/// Failed BEGIN has written nothing. Exact absence may become an operational
+/// hold, but an existing grant or registration must never acquire fresh-send
+/// authority merely because another writer currently holds the database.
+#[test]
+fn budget_admission_writer_contention_preserves_original_absence_and_evidence() {
+    let f = Fixture::new();
+    let (member, lease) = native(&f, "root", None);
+    publish(&f, TokenLimit::Unlimited, TokenLimit::Unlimited);
+    let issued = authorized(grant(&f, &member, &lease, "issued"));
+    let registered = attempt(&member, "registered");
+    f.store.register_budget_attempt(&registered).unwrap();
+    let blocker = f.store.open_budget().unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let fresh = attempt(&member, "fresh-busy");
+    let held = f
+        .store
+        .authorize_budget_attempt(&fresh, &member, "root", &lease);
+    assert!(
+        matches!(
+            held,
+            Ok(BudgetAttemptAdmission::Held(
+                BudgetAdmissionHold::StorageContention
+            ))
+        ),
+        "nonwriting contention must remain a typed operational hold: {held:?}"
+    );
+    assert!(!f.store.budget_attempt_registration(&fresh).unwrap());
+    assert!(f.store.budget_attempt_admission(&fresh).unwrap().is_none());
+    assert!(
+        matches!(grant(&f, &member, &lease, "issued"), BudgetAttemptAdmission::PreviouslyAuthorized(outcome) if outcome == issued)
+    );
+    assert!(matches!(
+        grant(&f, &member, &lease, "registered"),
+        BudgetAttemptAdmission::Held(BudgetAdmissionHold::RegistrationOnly)
+    ));
+    blocker.execute_batch("ROLLBACK").unwrap();
+    let granted = authorized(grant(&f, &member, &lease, "fresh-busy"));
+    assert_eq!(granted.attempt, fresh.id);
+}
+
 #[test]
 fn budget_admission_legacy_unsettled_registration_alone_fences_finite_root() {
     let f = Fixture::new();

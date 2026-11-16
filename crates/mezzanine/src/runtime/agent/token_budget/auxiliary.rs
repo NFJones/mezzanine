@@ -307,6 +307,10 @@ impl RuntimeSessionService {
             completion_resume_gate: None,
             #[cfg(test)]
             compaction_lane_wait: None,
+            #[cfg(test)]
+            storage_exhausted: None,
+            #[cfg(test)]
+            compaction_prefix_gate: None,
         }))
     }
 }

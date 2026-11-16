@@ -16792,6 +16792,16 @@ cycle without changing that root's revisions. A descriptive read never reserves
 capacity or authorizes a send. Registration-only evidence MUST NOT be retried as
 authorization. The original runner MUST exclude only its acknowledged parked
 interval from its finite active allowance; release MUST NOT grant fresh time.
+A native SQLite busy/locked refusal of BEGIN IMMEDIATE MAY become a distinct
+operational hold only after exact read-only reconciliation: an existing grant
+remains evidence-only, and an existing registration remains registration-only.
+This invocation MUST have executed no transaction statements. A concrete attempt
+MAY make at most one paced, actor-qualified reconsideration of that storage hold;
+unchanged revisions do not prove lock availability. Repeated contention MUST
+yield typed budget suspension without transport or provider repair. Errors after
+BEGIN, uncertain commits, failed reconciliation, and integrity/binding failures
+MUST NOT acquire this recovery authority. Essential original observation and
+receipt settlement remains required and may itself await storage availability.
 Mandatory claim cancellation MUST be adopted before fallible sibling pumping;
 queue pressure or retained pump failure MUST NOT destroy the held producer.
 Stop MUST retire that original producer and journal without a send. This

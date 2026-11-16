@@ -38,9 +38,43 @@ pub(crate) struct RuntimeBudgetRequestOwner {
     pub(super) completion_resume_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
     #[cfg(test)]
     pub(super) compaction_lane_wait: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
+    pub(super) storage_exhausted: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
+    pub(super) compaction_prefix_gate: Option<
+        Arc<(
+            std::sync::atomic::AtomicBool,
+            tokio::sync::Notify,
+            tokio::sync::Notify,
+        )>,
+    >,
 }
 
 impl RuntimeBudgetRequestOwner {
+    /// Gate only the first actual prefix ACK in this original wave. Later
+    /// nodes and repeated receipt observations cannot reopen the test gate.
+    #[cfg(test)]
+    pub(crate) fn gate_first_compaction_prefix_for_tests(
+        &mut self,
+        gate: Arc<(
+            std::sync::atomic::AtomicBool,
+            tokio::sync::Notify,
+            tokio::sync::Notify,
+        )>,
+    ) {
+        self.compaction_prefix_gate = Some(gate);
+    }
+
+    /// Observe the actual second nonwriting storage refusal, without yielding
+    /// or replacing the native outcome. Essential settlement remains separate.
+    #[cfg(test)]
+    pub(crate) fn observe_storage_exhaustion_for_tests(
+        &mut self,
+        signal: Arc<tokio::sync::Notify>,
+    ) {
+        self.storage_exhausted = Some(signal);
+    }
+
     /// Observe a real positive refusal before its wave writer awaits issued
     /// siblings. Notification neither parks the actor nor changes admission.
     #[cfg(test)]
@@ -368,6 +402,23 @@ impl RuntimeBudgetAttemptWork {
     pub(crate) fn note_compaction_lane_wait_for_tests(&self) {
         if let Some(signal) = &self.0.owner.compaction_lane_wait {
             signal.notify_one();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn note_storage_exhaustion_for_tests(&self) {
+        if let Some(signal) = &self.0.owner.storage_exhausted {
+            signal.notify_one();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn await_first_compaction_prefix_for_tests(&self) {
+        if let Some(gate) = &self.0.owner.compaction_prefix_gate
+            && !gate.0.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            gate.1.notify_one();
+            gate.2.notified().await;
         }
     }
 

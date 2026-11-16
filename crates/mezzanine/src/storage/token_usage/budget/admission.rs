@@ -66,6 +66,9 @@ pub(crate) enum BudgetAdmissionHold {
     /// Includes unlimited exposure issued before finite policy was installed.
     OutstandingExposure,
     Capacity,
+    /// A failed BEGIN wrote nothing and an exact read found no authorization.
+    /// This is operational contention, not numeric budget exhaustion.
+    StorageContention,
     /// Registration alone cannot be upgraded into another possible send.
     RegistrationOnly,
 }
@@ -248,7 +251,37 @@ impl TokenUsageStore {
             ));
         }
         let mut connection = self.open_budget()?;
-        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let tx =
+            match connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate) {
+                Ok(tx) => tx,
+                Err(rusqlite::Error::SqliteFailure(code, _))
+                    if matches!(
+                        code.code,
+                        rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                    ) =>
+                {
+                    // Only failed BEGIN qualifies: no statement or commit from
+                    // this invocation may have written. Reconcile exact existing
+                    // evidence before describing absence; never recreate a permit.
+                    lease.revalidate()?;
+                    if let Some(outcome) = self.budget_attempt_admission(attempt)? {
+                        if outcome.owner != owner {
+                            return Err(MezError::conflict(
+                                "budget admission original owner changed",
+                            ));
+                        }
+                        return Ok(BudgetAttemptAdmission::PreviouslyAuthorized(outcome));
+                    }
+                    return Ok(BudgetAttemptAdmission::Held(
+                        if self.budget_attempt_registration(attempt)? {
+                            BudgetAdmissionHold::RegistrationOnly
+                        } else {
+                            BudgetAdmissionHold::StorageContention
+                        },
+                    ));
+                }
+                Err(error) => return Err(error.into()),
+            };
         if namespace(&tx)? != attempt.namespace {
             return Err(MezError::conflict("budget admission namespace mismatch"));
         }

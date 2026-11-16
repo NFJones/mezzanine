@@ -89,6 +89,30 @@ enum HoldControl {
     StopPartial,
     Active,
     ActiveRelease,
+    PrefixRelease,
+    PrefixStop,
+    StorageRelease,
+    StorageExhaust,
+}
+
+#[tokio::test]
+async fn budget_recursive_compaction_storage_contention_reacquires_original_wave() {
+    Box::pin(qualify(
+        false,
+        BudgetLimits::default(),
+        Some(HoldControl::StorageRelease),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn budget_recursive_compaction_storage_contention_exhausts_without_send() {
+    Box::pin(qualify(
+        false,
+        BudgetLimits::default(),
+        Some(HoldControl::StorageExhaust),
+    ))
+    .await;
 }
 
 #[tokio::test]
@@ -133,7 +157,39 @@ async fn budget_recursive_compaction_active_equality_release_resumes_original_tu
     .await;
 }
 
+/// A real subtotal transaction has committed while terminal settlement has not.
+/// Neither a sibling park nor another send may borrow that incomplete ACK.
+#[tokio::test]
+async fn budget_recursive_compaction_durable_prefix_keeps_lane_until_terminal_ack() {
+    Box::pin(qualify(
+        false,
+        crossing_limits(),
+        Some(HoldControl::PrefixRelease),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn budget_recursive_compaction_stop_during_prefix_ack_retires_original_lane() {
+    Box::pin(qualify(
+        false,
+        crossing_limits(),
+        Some(HoldControl::PrefixStop),
+    ))
+    .await;
+}
+
 async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldControl>) {
+    let storage_case = matches!(
+        control,
+        Some(HoldControl::StorageRelease | HoldControl::StorageExhaust)
+    );
+    let storage_exhaust = matches!(control, Some(HoldControl::StorageExhaust));
+    let prefix_gate_case = matches!(
+        control,
+        Some(HoldControl::PrefixRelease | HoldControl::PrefixStop)
+    );
+    let stop_prefix = matches!(control, Some(HoldControl::PrefixStop));
     let active = matches!(
         control,
         Some(HoldControl::Active | HoldControl::ActiveRelease)
@@ -144,7 +200,9 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
         Some(HoldControl::StopIssued | HoldControl::StopPartial)
     );
     let stop_held = match control {
-        Some(HoldControl::Release | HoldControl::ActiveRelease) => Some(false),
+        Some(HoldControl::Release | HoldControl::ActiveRelease | HoldControl::PrefixRelease) => {
+            Some(false)
+        }
         Some(HoldControl::Stop) => Some(true),
         _ => None,
     };
@@ -219,7 +277,13 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
             service
                 .execute_agent_shell_command(&primary, "/stop")
                 .unwrap();
-            service.replace_config_layers(vec![layer(20_000)]).unwrap();
+            service
+                .replace_config_layers(vec![layer(if storage_exhaust {
+                    1_000_000
+                } else {
+                    20_000
+                })])
+                .unwrap();
             service
                 .execute_agent_shell_command(&primary, "/compact")
                 .unwrap();
@@ -251,13 +315,19 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
     let issued = Arc::new(tokio::sync::Notify::new());
     let physical_issued = issued.clone();
     let lane_wait = Arc::new(tokio::sync::Notify::new());
+    let storage_exhausted = Arc::new(tokio::sync::Notify::new());
     let prefix_witness = Arc::new(tokio::sync::Notify::new());
+    let committed_prefix = Arc::new((
+        std::sync::atomic::AtomicBool::new(false),
+        tokio::sync::Notify::new(),
+        tokio::sync::Notify::new(),
+    ));
     let ordinary = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let ordinary_request = ordinary.clone();
     let mut server = tokio::spawn(async move {
-        // The same server task owns both sockets. For unlimited policy, do
-        // not answer the first request until a second complete physical
-        // request arrives. A serialized wave cannot pass this barrier.
+        // The same server task owns both sockets. The no-contention unlimited
+        // control requires overlap. Deliberate storage recovery owns an
+        // exclusive lane instead and must not wait on that contrary barrier.
         let mut first_socket: Option<tokio::net::TcpStream> = None;
         loop {
             let (mut socket, _) = listener.accept().await?;
@@ -349,7 +419,7 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                 body.len(),
                 body
             );
-            if !limits.requires_serial_inference() && prior == 0 {
+            if !limits.requires_serial_inference() && !storage_case && prior == 0 {
                 first_socket = Some(socket);
                 continue;
             }
@@ -405,16 +475,31 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                 // Consume only timer descriptors; no fake timer callback or
                 // archive ACK is needed to drive these genuine wave receipts.
                 handle.drain_timer_side_effects(256).await?;
-                if stop_issued {
+                if stop_issued || prefix_gate_case || storage_case {
                     dispatch
                         .budget_owner
                         .as_mut()
                         .unwrap()
                         .observe_compaction_lane_wait_for_tests(lane_wait.clone());
                 }
+                if prefix_gate_case {
+                    dispatch.budget_owner.as_mut().unwrap()
+                        .gate_first_compaction_prefix_for_tests(committed_prefix.clone());
+                }
+                if storage_exhaust {
+                    dispatch.budget_owner.as_mut().unwrap()
+                        .observe_storage_exhaustion_for_tests(storage_exhausted.clone());
+                }
                 let owner = ProviderWorkerOwner::compaction(&dispatch);
                 let waiter = handle.clone();
                 let decoded = prefix_witness.clone();
+                // The real native authorization must encounter failed BEGIN;
+                // no mocked grant/refusal or synthetic receipt is installed.
+                let blocker = if waves == 0 && storage_case {
+                    let db = rusqlite::Connection::open(store.path())?;
+                    db.execute_batch("BEGIN IMMEDIATE")?;
+                    Some(db)
+                } else { None };
                 let admitted = spawn_owned_agent_provider_worker(
                     &mut workers,
                     &mut owners,
@@ -439,6 +524,39 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                     ),
                 );
                 assert!(admitted.is_some(), "original monitor admission refused");
+                if waves == 0 && storage_case {
+                    tokio::time::timeout(Duration::from_secs(10), lane_wait.notified()).await
+                        .map_err(|_| MezError::invalid_state("native storage hold unavailable"))?;
+                    assert_eq!(calls.load(Ordering::SeqCst), 0);
+                    assert_eq!(rows(&store, "budget_admissions"), 0);
+                    assert_eq!(rows(&store, "budget_attempts"), 0);
+                    if storage_exhaust {
+                        tokio::time::timeout(Duration::from_secs(10), storage_exhausted.notified()).await
+                            .map_err(|_| MezError::invalid_state("bounded native exhaustion unavailable"))?;
+                    }
+                    // The original exchange has refused; unblock mandatory
+                    // observation settlement, not a fresh authorization.
+                    blocker.as_ref().unwrap().execute_batch("ROLLBACK")?;
+                }
+                if waves == 0 && prefix_gate_case {
+                    tokio::time::timeout(Duration::from_secs(10), async {
+                        committed_prefix.1.notified().await;
+                        lane_wait.notified().await;
+                    }).await.map_err(|_| MezError::invalid_state("durable prefix/sibling boundary unavailable"))?;
+                    assert_eq!(calls.load(Ordering::SeqCst), 1);
+                    assert_eq!(rows(&store, "budget_receipts"), 1);
+                    assert_eq!(store.budget_account(&member.root)?.known, UsageTotals { input: 11, output: 3 });
+                    let unretired: i64 = rusqlite::Connection::open(store.path())?
+                        .query_row("SELECT COUNT(*) FROM budget_admissions WHERE retired_receipt IS NULL", [], |row| row.get(0))?;
+                    assert_eq!(unretired, 1, "prefix ACK cannot retire physical exposure");
+                    assert!(!handle.budget_compaction_claim_is_quiescent("%1".into(), generation).await?);
+                    if stop_prefix {
+                        handle.execute_agent_shell_command(primary.clone(), "/stop".into()).await?;
+                    }
+                    // Stop fences inference, not mandatory original receipt
+                    // settlement. Release only this artificial test await.
+                    committed_prefix.2.notify_one();
+                }
                 if stop_issued {
                     tokio::time::timeout(Duration::from_secs(10), async {
                         issued.notified().await;
@@ -542,8 +660,14 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                             MezError::invalid_state("recursive wave observation deadline")
                         })?
                         .ok_or_else(|| MezError::invalid_state("missing original monitor"))?;
+                if let Some(db) = blocker {
+                    drop(db);
+                }
                 assert!(
-                    if stop_held == Some(true) || stop_issued {
+                    if storage_exhaust {
+                        matches!(&joined, Ok((_, Ok(Some((RuntimeEvent::AgentCompaction(
+                            AgentCompactionEvent::Failed { kind, .. }), _))))) if kind == "budget_suspended")
+                    } else if stop_held == Some(true) || stop_issued || stop_prefix {
                         matches!(&joined, Ok((_, Ok(None))))
                             || matches!(
                                 &joined,
@@ -596,7 +720,14 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                 )
                 .await?;
                 waves += 1;
-                if stop_held == Some(true) || stop_issued {
+                if storage_exhaust {
+                    assert_eq!(calls.load(Ordering::SeqCst), 0);
+                    assert_eq!(rows(&store, "budget_attempts"), 0);
+                    assert_eq!(store.budget_account(&member.root)?.known, UsageTotals::default());
+                    assert_eq!(accepted_heads(&handle).await?, 0);
+                    return Ok::<_, MezError>((waves, member.root, false));
+                }
+                if stop_held == Some(true) || stop_issued || stop_prefix {
                     let persistence = run_async_persistence_side_effect_service(
                         &handle,
                         AsyncRuntimeSideEffectServiceConfig {
@@ -847,10 +978,18 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
         .unwrap();
     assert_eq!(
         published,
-        !stop_between && stop_held != Some(true) && !stop_issued
+        !stop_between
+            && stop_held != Some(true)
+            && !stop_issued
+            && !stop_prefix
+            && !storage_exhaust
     );
     assert_eq!(claims as usize, count);
-    assert!(count > 0);
+    if storage_exhaust {
+        assert_eq!(count, 0);
+    } else {
+        assert!(count > 0);
+    }
     if let Some(turn) = &original_turn {
         assert_eq!(
             exit.service.agent_turn_ledger().turn(turn).unwrap().state,
@@ -881,7 +1020,7 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
             "local retirement cannot fabricate measured zero usage"
         );
     }
-    if stop_between || stop_held == Some(true) || stop_issued {
+    if stop_between || stop_held == Some(true) || stop_issued || stop_prefix || storage_exhaust {
         assert_eq!(waves, 1);
         assert!(restored.is_none());
     } else {

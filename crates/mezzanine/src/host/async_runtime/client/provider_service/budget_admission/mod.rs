@@ -323,10 +323,14 @@ fn reconsider_changed_hold(
         BudgetAdmissionHold, MAX_OUTSTANDING_BUDGET_ATTEMPTS,
     };
     // A global count can cycle while this root's monotonic revisions do not.
-    // The previous observation predates this fresh native Capacity refusal,
-    // so equality cannot inhibit a currently available slot forever.
+    // Capacity and SQLite lock availability can change without revisions.
+    // Storage reconsideration is separately bounded per physical attempt.
     state.outstanding_attempts < MAX_OUTSTANDING_BUDGET_ATTEMPTS
-        && (previous != Some(state) || reason == BudgetAdmissionHold::Capacity)
+        && (previous != Some(state)
+            || matches!(
+                reason,
+                BudgetAdmissionHold::Capacity | BudgetAdmissionHold::StorageContention
+            ))
 }
 
 #[cfg(test)]
@@ -595,11 +599,20 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                 .await
                 .map_err(|_| suspended("original budget authorization unavailable"))?;
             let mut previous = None;
+            let mut storage_reconsidered = false;
             while let RuntimeBudgetAttemptAdmission::Held(reason) = &admission {
                 use crate::storage::token_usage::budget::admission::BudgetAdmissionHold;
                 let Some(handle) = &self.0.waiter else { break };
                 if *reason == BudgetAdmissionHold::RegistrationOnly {
                     break;
+                }
+                if *reason == BudgetAdmissionHold::StorageContention {
+                    if storage_reconsidered {
+                        #[cfg(test)]
+                        self.0.work.note_storage_exhaustion_for_tests();
+                        break;
+                    }
+                    storage_reconsidered = true;
                 }
                 if let Some(lane) = &self.0.compaction_lane {
                     let needs_writer = {
@@ -791,6 +804,11 @@ impl ProviderObservationReceipt for Receipt {
                 return Ok(());
             };
             checkpoint_work(work).await?;
+            #[cfg(test)]
+            self.source
+                .work
+                .await_first_compaction_prefix_for_tests()
+                .await;
             // Reconciliation above joined the original writer, but descriptive
             // evidence alone is insufficient. Only a still-retained permit can
             // be withdrawn, and transfer into Phase has no intervening await.
