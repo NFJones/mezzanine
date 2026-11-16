@@ -301,8 +301,13 @@ impl RuntimeBudgetAdmissionWork {
         window: Option<Arc<()>>,
     ) -> Result<RuntimeBudgetAttemptAdmission> {
         let work = self.work.clone();
-        self.retry_held_using(window, move || work.authorize())
-            .await
+        self.retry_held_using(window, move || {
+            let result = work.authorize();
+            #[cfg(test)]
+            work.gate_reconsidered_grant_for_tests(&result)?;
+            result
+        })
+        .await
     }
 
     async fn retry_held_using<F>(

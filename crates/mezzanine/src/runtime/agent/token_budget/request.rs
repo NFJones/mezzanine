@@ -41,6 +41,8 @@ pub(crate) struct RuntimeBudgetRequestOwner {
     #[cfg(test)]
     pub(super) storage_exhausted: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
+    pub(super) reconsidered_grant_gate: Option<Arc<ReconsideredGrantGate>>,
+    #[cfg(test)]
     pub(super) compaction_prefix_gate: Option<
         Arc<(
             std::sync::atomic::AtomicBool,
@@ -50,7 +52,31 @@ pub(crate) struct RuntimeBudgetRequestOwner {
     >,
 }
 
+/// Test-only pause in the original blocking worker after native commit. It
+/// cannot fabricate a permit, complete its writer, or qualify retirement.
+#[cfg(test)]
+#[derive(Debug)]
+pub(super) struct ReconsideredGrantGate {
+    selected: std::sync::atomic::AtomicBool,
+    entered: Arc<tokio::sync::Notify>,
+    release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
 impl RuntimeBudgetRequestOwner {
+    #[cfg(test)]
+    pub(crate) fn gate_first_reconsidered_grant_for_tests(
+        &mut self,
+    ) -> (Arc<tokio::sync::Notify>, std::sync::mpsc::Sender<()>) {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let (release, receiver) = std::sync::mpsc::channel();
+        self.reconsidered_grant_gate = Some(Arc::new(ReconsideredGrantGate {
+            selected: std::sync::atomic::AtomicBool::new(false),
+            entered: entered.clone(),
+            release: std::sync::Mutex::new(receiver),
+        }));
+        (entered, release)
+    }
+
     /// Gate only the first actual prefix ACK in this original wave. Later
     /// nodes and repeated receipt observations cannot reopen the test gate.
     #[cfg(test)]
@@ -420,6 +446,29 @@ impl RuntimeBudgetAttemptWork {
             gate.1.notify_one();
             gate.2.notified().await;
         }
+    }
+
+    /// Called only inside the retained original reconsideration worker, with
+    /// its real native outcome still on that worker's stack.
+    #[cfg(test)]
+    pub(super) fn gate_reconsidered_grant_for_tests(
+        &self,
+        result: &Result<RuntimeBudgetAttemptAdmission>,
+    ) -> Result<()> {
+        if matches!(result, Ok(RuntimeBudgetAttemptAdmission::Authorized(_)))
+            && let Some(gate) = &self.0.owner.reconsidered_grant_gate
+            && !gate
+                .selected
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            gate.entered.notify_one();
+            gate.release
+                .lock()
+                .map_err(|_| MezError::invalid_state("native grant fixture poisoned"))?
+                .recv()
+                .map_err(|_| MezError::invalid_state("native grant fixture released"))?;
+        }
+        Ok(())
     }
 
     pub(super) fn wrap_permit(&self, permit: BudgetSendPermit) -> RuntimeBudgetSendPermit {

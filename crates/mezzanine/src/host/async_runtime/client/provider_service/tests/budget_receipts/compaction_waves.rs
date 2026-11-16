@@ -93,6 +93,19 @@ enum HoldControl {
     PrefixStop,
     StorageRelease,
     StorageExhaust,
+    StopRetry,
+}
+
+/// Stop races with the real committed retry result, not merely a future
+/// scheduled to authorize. The original writer still owns its unused permit.
+#[tokio::test]
+async fn budget_recursive_compaction_stop_during_native_retry_retires_unused_grant() {
+    Box::pin(qualify(
+        false,
+        crossing_limits(),
+        Some(HoldControl::StopRetry),
+    ))
+    .await;
 }
 
 #[tokio::test]
@@ -180,6 +193,7 @@ async fn budget_recursive_compaction_stop_during_prefix_ack_retires_original_lan
 }
 
 async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldControl>) {
+    let stop_retry = matches!(control, Some(HoldControl::StopRetry));
     let storage_case = matches!(
         control,
         Some(HoldControl::StorageRelease | HoldControl::StorageExhaust)
@@ -200,9 +214,12 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
         Some(HoldControl::StopIssued | HoldControl::StopPartial)
     );
     let stop_held = match control {
-        Some(HoldControl::Release | HoldControl::ActiveRelease | HoldControl::PrefixRelease) => {
-            Some(false)
-        }
+        Some(
+            HoldControl::Release
+            | HoldControl::ActiveRelease
+            | HoldControl::PrefixRelease
+            | HoldControl::StopRetry,
+        ) => Some(false),
         Some(HoldControl::Stop) => Some(true),
         _ => None,
     };
@@ -493,6 +510,9 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                 let owner = ProviderWorkerOwner::compaction(&dispatch);
                 let waiter = handle.clone();
                 let decoded = prefix_witness.clone();
+                let grant_gate = if stop_retry && waves == 0 {
+                    Some(dispatch.budget_owner.as_mut().unwrap().gate_first_reconsidered_grant_for_tests())
+                } else { None };
                 // The real native authorization must encounter failed BEGIN;
                 // no mocked grant/refusal or synthetic receipt is installed.
                 let blocker = if waves == 0 && storage_case {
@@ -653,6 +673,15 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                     .await
                     .map_err(|_| MezError::invalid_state("finite release writer failed"))??;
                 }
+                if let Some((entered, release)) = grant_gate {
+                    tokio::time::timeout(Duration::from_secs(10), entered.notified()).await
+                        .map_err(|_| MezError::invalid_state("original committed retry unavailable"))?;
+                    assert_eq!(calls.load(Ordering::SeqCst), 1);
+                    assert_eq!(rows(&store, "budget_admissions"), 2);
+                    assert!(!handle.budget_compaction_claim_is_quiescent("%1".into(), generation).await?);
+                    handle.execute_agent_shell_command(primary.clone(), "/stop".into()).await?;
+                    release.send(()).map_err(|_| MezError::invalid_state("original grant writer retired early"))?;
+                }
                 let joined =
                     tokio::time::timeout(Duration::from_secs(30), workers.join_next_with_id())
                         .await
@@ -667,7 +696,7 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                     if storage_exhaust {
                         matches!(&joined, Ok((_, Ok(Some((RuntimeEvent::AgentCompaction(
                             AgentCompactionEvent::Failed { kind, .. }), _))))) if kind == "budget_suspended")
-                    } else if stop_held == Some(true) || stop_issued || stop_prefix {
+                    } else if stop_held == Some(true) || stop_issued || stop_prefix || stop_retry {
                         matches!(&joined, Ok((_, Ok(None))))
                             || matches!(
                                 &joined,
@@ -727,7 +756,7 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
                     assert_eq!(accepted_heads(&handle).await?, 0);
                     return Ok::<_, MezError>((waves, member.root, false));
                 }
-                if stop_held == Some(true) || stop_issued || stop_prefix {
+                if stop_held == Some(true) || stop_issued || stop_prefix || stop_retry {
                     let persistence = run_async_persistence_side_effect_service(
                         &handle,
                         AsyncRuntimeSideEffectServiceConfig {
@@ -983,8 +1012,9 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
             && !stop_issued
             && !stop_prefix
             && !storage_exhaust
+            && !stop_retry
     );
-    assert_eq!(claims as usize, count);
+    assert_eq!(claims as usize, count + usize::from(stop_retry));
     if storage_exhaust {
         assert_eq!(count, 0);
     } else {
@@ -1020,7 +1050,30 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldC
             "local retirement cannot fabricate measured zero usage"
         );
     }
-    if stop_between || stop_held == Some(true) || stop_issued || stop_prefix || storage_exhaust {
+    if stop_retry {
+        assert_eq!(
+            store.budget_account(&original_member.root).unwrap().known,
+            UsageTotals {
+                input: 11,
+                output: 3
+            }
+        );
+        let snapshot: String = rusqlite::Connection::open(store.path()).unwrap().query_row(
+            "SELECT a.snapshot FROM budget_attempts a JOIN budget_admissions n ON n.attempt=a.id WHERE json_extract(n.body,'$.known.input')=11",
+            [], |row| row.get(0)).unwrap();
+        let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+        assert_eq!(
+            snapshot["terminal"],
+            serde_json::json!({"input":null,"output":null,"terminal":true})
+        );
+    }
+    if stop_between
+        || stop_held == Some(true)
+        || stop_issued
+        || stop_prefix
+        || storage_exhaust
+        || stop_retry
+    {
         assert_eq!(waves, 1);
         assert!(restored.is_none());
     } else {

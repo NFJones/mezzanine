@@ -946,6 +946,8 @@ impl RuntimeSessionService {
             #[cfg(test)]
             storage_exhausted: None,
             #[cfg(test)]
+            reconsidered_grant_gate: None,
+            #[cfg(test)]
             compaction_prefix_gate: None,
         };
         owner.validate_request(&turn.conversation_id)?;
