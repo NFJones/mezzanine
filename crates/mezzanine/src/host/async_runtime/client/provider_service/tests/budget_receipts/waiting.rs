@@ -101,6 +101,26 @@ pub(super) async fn assert_browser_paused(
     );
 }
 
+/// Observe the actual local log, not a synthetic notice predicate. Repeated
+/// actor park/read polling must not append another notice to the same hold.
+pub(super) async fn assert_budget_notice_once(handle: &AsyncRuntimeSessionHandle) {
+    let view = handle
+        .render_client_view(
+            mez_mux::presentation::ClientViewRole::Primary,
+            mez_mux::layout::Size::new(160, 60).unwrap(),
+            crate::host::terminal::TerminalClientLoopConfig::default(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let text = view.lines.join("\n");
+    assert_eq!(
+        text.matches("session token budget hold").count(),
+        1,
+        "{text}"
+    );
+}
+
 async fn publish(store: TokenUsageStore) {
     tokio::task::spawn_blocking(move || {
         let projection = store.budget_policy_projection().unwrap();
@@ -288,6 +308,11 @@ async fn qualify(stop: bool, pressure: bool, human: Option<HumanRelease>) {
                 assert_eq!(sends.load(Ordering::SeqCst), 0);
                 assert_eq!(rows(&store, "budget_attempts"), 0);
                 assert!(handle.agent_turn_is_running(&turn).await.unwrap());
+                if human.is_none() && !pressure {
+                    assert_budget_notice_once(&handle).await;
+                    tokio::time::sleep(Duration::from_millis(350)).await;
+                    assert_budget_notice_once(&handle).await;
+                }
                 if human.is_some() {
                     browser_input(&handle, &primary, b"/list-agents --all\r").await;
                     // The sole row is the original registered agent; verify

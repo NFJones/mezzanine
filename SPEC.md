@@ -16948,6 +16948,11 @@ MUST remain bounded at 4096 live candidates/windows with checked monotonic order
 capacity refusal MUST retain original caller custody without authorization.
 This does not establish continuous-arrival starvation freedom or cross-runtime
 fairness, replace family schedulers/timer adoption, or activate budgeting.
+The first qualified provider or auxiliary budget park MUST publish a bounded
+local hold notice, including retention of an already-settled response. Duplicate
+park polls MUST NOT repeat it. The notice MUST NOT contain request payloads,
+change policy, issue inference or grant send/effect authority. Publication refusal
+MUST preserve original claim/receipt custody and MUST NOT bypass admission.
 Human `/stop` MUST retire queued and claimed generated-title publication for the
 invoking conversation even when no ordinary turn is live. Original late-expense
 custody MUST survive; lifting budget policy MUST NOT revive that stopped title.

@@ -234,6 +234,11 @@ async fn qualify(mode: CompletionCase) {
             if rows(&store, "budget_receipts") != 2 || !handle.agent_turn_is_running(&turn).await.unwrap() {
                 return Err("original terminal receipt or claim missing".to_owned());
             }
+            if mode == CompletionCase::Release {
+                waiting::assert_budget_notice_once(&handle).await;
+                tokio::time::sleep(Duration::from_millis(350)).await;
+                waiting::assert_budget_notice_once(&handle).await;
+            }
             if counter.exists() || handle.drain_runtime_side_effects(256).await.unwrap().iter().any(|effect| matches!(effect,
                 crate::runtime::RuntimeSideEffect::DispatchNativeShellAction { turn_id, .. } if turn_id == &turn
             )) {

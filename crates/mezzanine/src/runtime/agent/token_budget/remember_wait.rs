@@ -74,7 +74,7 @@ impl RuntimeSessionService {
         let claim = self
             .agent
             .claimed_agent_remember_tasks
-            .get_mut(&pane)
+            .get(&pane)
             .ok_or_else(|| MezError::conflict("original memory claim unavailable"))?;
         if let Some(wait) = &claim.budget_wait {
             if wait.capture.same_capture(&capture) && !wait.resumed && wait.waiter.ptr_eq(&waiter) {
@@ -86,6 +86,12 @@ impl RuntimeSessionService {
                 ));
             }
         }
+        self.append_budget_hold_notice(&pane)?;
+        let claim = self
+            .agent
+            .claimed_agent_remember_tasks
+            .get_mut(&pane)
+            .ok_or_else(|| MezError::conflict("original memory claim unavailable"))?;
         claim.budget_wait = Some(RememberWait {
             capture,
             waiter,

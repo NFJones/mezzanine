@@ -85,6 +85,17 @@ pub(super) struct ProviderWait {
 }
 
 impl RuntimeSessionService {
+    /// Fixed local presentation only, after current hold qualification and
+    /// before wait mutation. No payload, policy authority or provider work.
+    /// A refused append leaves the original claim/receipt owned; callers must
+    /// not bypass admission. Duplicate parked captures return before this call.
+    pub(super) fn append_budget_hold_notice(&mut self, pane: &str) -> Result<()> {
+        self.append_agent_status_text_to_terminal_buffer(
+            pane,
+            "agent: session token budget hold; original request/result retained; waiting for budget, accounting, or fair admission; Stop remains available",
+        )
+    }
+
     /// A retained claim is quiescent only while its exact positive nonwriting
     /// capture remains live and it has not resumed. This is not permission to
     /// send, retire the worker, or ignore independent issued effects.
@@ -183,7 +194,7 @@ impl RuntimeSessionService {
         now_ms: u64,
     ) -> Result<RuntimeTransition> {
         let capture = capture.into();
-        self.budget_wait_turn(agent, turn, generation, &capture)?;
+        let record = self.budget_wait_turn(agent, turn, generation, &capture)?;
         if let Some(wait) = self.agent.budget_memberships.provider_waits.get(turn) {
             if wait.generation == generation
                 && wait.capture.same_capture(&capture)
@@ -216,6 +227,7 @@ impl RuntimeSessionService {
                 "budget provider wait capacity exhausted",
             ));
         }
+        self.append_budget_hold_notice(&record.pane_id)?;
         self.agent.agent_scheduler.wait_running(turn)?;
         self.agent.budget_memberships.provider_waits.insert(
             turn.into(),

@@ -215,8 +215,8 @@ impl RuntimeSessionService {
         let lease = self
             .agent
             .claimed_agent_compaction_tasks
-            .get_mut(&(pane.clone(), generation))
-            .and_then(|claim| claim.budget_lease.as_mut())
+            .get(&(pane.clone(), generation))
+            .and_then(|claim| claim.budget_lease.as_ref())
             .ok_or_else(|| MezError::conflict("original compaction lease unavailable"))?;
         if let Some(wait) = &lease.wait {
             if wait.capture.same_capture(&capture) && !wait.resumed && wait.waiter.ptr_eq(&waiter) {
@@ -234,6 +234,13 @@ impl RuntimeSessionService {
                 "original compaction lease exhausted before park",
             ));
         }
+        self.append_budget_hold_notice(&pane)?;
+        let lease = self
+            .agent
+            .claimed_agent_compaction_tasks
+            .get_mut(&(pane.clone(), generation))
+            .and_then(|claim| claim.budget_lease.as_mut())
+            .ok_or_else(|| MezError::conflict("original compaction lease unavailable"))?;
         lease.wait = Some(CompactionWait {
             capture,
             waiter,

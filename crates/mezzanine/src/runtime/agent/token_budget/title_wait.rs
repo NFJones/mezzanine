@@ -127,11 +127,11 @@ impl RuntimeSessionService {
         if waiter.upgrade().is_none() {
             return Err(MezError::conflict("original title waiter retired"));
         }
-        let (conversation, _) = self.budget_title_subject(&capture)?;
+        let (conversation, pane) = self.budget_title_subject(&capture)?;
         let claim = self
             .agent
             .claimed_agent_session_title_tasks
-            .get_mut(&conversation)
+            .get(&conversation)
             .ok_or_else(|| MezError::conflict("original title claim unavailable"))?;
         if let Some(wait) = &claim.budget_wait {
             if wait.capture.same_capture(&capture) && !wait.resumed && wait.waiter.ptr_eq(&waiter) {
@@ -148,6 +148,12 @@ impl RuntimeSessionService {
                 "original title lease exhausted before park",
             ));
         }
+        self.append_budget_hold_notice(&pane)?;
+        let claim = self
+            .agent
+            .claimed_agent_session_title_tasks
+            .get_mut(&conversation)
+            .ok_or_else(|| MezError::conflict("original title claim unavailable"))?;
         claim.budget_wait = Some(TitleWait {
             capture,
             waiter,

@@ -247,9 +247,15 @@ hold. Queuing writes no native registration or expense and grants no permission;
 Stop still fences its eventual send. Uncontended observations retain the direct
 native path, and later waiters do not retroactively revoke them. This does not
 prove continuous-arrival starvation freedom or cross-runtime fairness.
-Whole-root inference fairness, memory capacity
-release/fair requeue, root-wide effect gates and production membership activation
-remain unfinished; compaction's retained-wave lease suspension is separate.
+Memory retains its exact per-pane claim and bounded expense evidence while
+parked; these are custody, not a separate global runnable-memory slot. Existing
+ordinary capacity release and fair reacquisition remain distinct from auxiliary
+claim ownership. Root-wide effect gates and production activation remain
+unfinished; compaction's retained-wave lease suspension is separate.
+The first qualified provider or auxiliary park emits a fixed local budget-hold
+notice, including when an already-settled response is retained. Duplicate park
+polls do not repeat it. The notice neither changes policy nor issues inference;
+publication refusal cannot bypass the original admission or custody checks.
 
 Native async sends also retain evidence that their exact local transport future
 and active callback futures were destroyed, including on cancellation. This transfer
