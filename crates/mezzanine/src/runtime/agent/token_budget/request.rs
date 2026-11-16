@@ -36,9 +36,21 @@ pub(crate) struct RuntimeBudgetRequestOwner {
     pub(super) title_grant_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
     #[cfg(test)]
     pub(super) completion_resume_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
+    #[cfg(test)]
+    pub(super) compaction_lane_wait: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl RuntimeBudgetRequestOwner {
+    /// Observe a real positive refusal before its wave writer awaits issued
+    /// siblings. Notification neither parks the actor nor changes admission.
+    #[cfg(test)]
+    pub(crate) fn observe_compaction_lane_wait_for_tests(
+        &mut self,
+        signal: Arc<tokio::sync::Notify>,
+    ) {
+        self.compaction_lane_wait = Some(signal);
+    }
+
     /// Pause only the original producer after the actor has adopted its resume
     /// timer, before its fresh completion read. This creates no admission proof.
     #[cfg(test)]
@@ -349,6 +361,13 @@ impl RuntimeBudgetAttemptWork {
         if let Some(gate) = &self.0.owner.title_grant_gate {
             gate.0.notify_one();
             gate.1.notified().await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn note_compaction_lane_wait_for_tests(&self) {
+        if let Some(signal) = &self.0.owner.compaction_lane_wait {
+            signal.notify_one();
         }
     }
 

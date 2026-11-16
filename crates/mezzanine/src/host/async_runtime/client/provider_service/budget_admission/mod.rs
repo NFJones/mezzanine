@@ -616,6 +616,8 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                         phase.compaction_writer.is_none()
                     };
                     if needs_writer {
+                        #[cfg(test)]
+                        self.0.work.note_compaction_lane_wait_for_tests();
                         let writer = lane.clone().write_owned().await;
                         self.0
                             .phase

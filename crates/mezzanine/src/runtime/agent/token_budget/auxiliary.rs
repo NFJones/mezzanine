@@ -305,6 +305,8 @@ impl RuntimeSessionService {
             title_grant_gate: None,
             #[cfg(test)]
             completion_resume_gate: None,
+            #[cfg(test)]
+            compaction_lane_wait: None,
         }))
     }
 }

@@ -55,12 +55,37 @@ async fn budget_recursive_compaction_finite_root_adopts_original_head() {
 
 #[tokio::test]
 async fn budget_recursive_compaction_equality_release_retains_original_wave() {
-    Box::pin(qualify(false, crossing_limits(), Some(false))).await;
+    Box::pin(qualify(
+        false,
+        crossing_limits(),
+        Some(HoldControl::Release),
+    ))
+    .await;
 }
 
 #[tokio::test]
 async fn budget_recursive_compaction_equality_stop_cannot_revive_wave() {
-    Box::pin(qualify(false, crossing_limits(), Some(true))).await;
+    Box::pin(qualify(false, crossing_limits(), Some(HoldControl::Stop))).await;
+}
+
+/// A real request owns the reader while a positively refused sibling reaches
+/// the exclusive-lane await. Stop must retire both without pretending that the
+/// still-open remote request supplied known usage or a successful publication.
+#[tokio::test]
+async fn budget_recursive_compaction_stop_retires_issued_and_waiting_siblings() {
+    Box::pin(qualify(
+        false,
+        crossing_limits(),
+        Some(HoldControl::StopIssued),
+    ))
+    .await;
+}
+
+#[derive(Clone, Copy)]
+enum HoldControl {
+    Release,
+    Stop,
+    StopIssued,
 }
 
 fn crossing_limits() -> BudgetLimits {
@@ -70,7 +95,13 @@ fn crossing_limits() -> BudgetLimits {
     }
 }
 
-async fn qualify(stop_between: bool, limits: BudgetLimits, stop_held: Option<bool>) {
+async fn qualify(stop_between: bool, limits: BudgetLimits, control: Option<HoldControl>) {
+    let stop_issued = matches!(control, Some(HoldControl::StopIssued));
+    let stop_held = match control {
+        Some(HoldControl::Release) => Some(false),
+        Some(HoldControl::Stop) => Some(true),
+        _ => None,
+    };
     let Prepared {
         mut service,
         dispatch,
@@ -133,7 +164,14 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, stop_held: Option<boo
     let observed = calls.clone();
     let checked_store = store.clone();
     let checked_root = original_member.root.clone();
+    let issued = Arc::new(tokio::sync::Notify::new());
+    let physical_issued = issued.clone();
+    let lane_wait = Arc::new(tokio::sync::Notify::new());
     let mut server = tokio::spawn(async move {
+        // The same server task owns both sockets. For unlimited policy, do
+        // not answer the first request until a second complete physical
+        // request arrives. A serialized wave cannot pass this barrier.
+        let mut first_socket: Option<tokio::net::TcpStream> = None;
         loop {
             let (mut socket, _) = listener.accept().await?;
             let mut bytes = Vec::new();
@@ -198,10 +236,28 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, stop_held: Option<boo
                 .await
                 .map_err(|_| MezError::invalid_state("physical receipt ordering failed"))?;
             }
+            if stop_issued {
+                assert_eq!(prior, 0);
+                physical_issued.notify_one();
+                std::future::pending::<()>().await;
+            }
             let body = serde_json::json!({"model":"test-model","choices":[{
                 "index":0,"finish_reason":"stop","message":{"role":"assistant","content":"one final manual head"}
             }],"usage":{"prompt_tokens":11,"completion_tokens":3}}).to_string();
-            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await?;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            if !limits.requires_serial_inference() && prior == 0 {
+                first_socket = Some(socket);
+                continue;
+            }
+            if let Some(mut first) = first_socket.take() {
+                assert_eq!(prior, 1, "unlimited overlap must precede any response");
+                first.write_all(response.as_bytes()).await?;
+            }
+            socket.write_all(response.as_bytes()).await?;
         }
         #[allow(unreachable_code)]
         Ok::<(), MezError>(())
@@ -249,6 +305,13 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, stop_held: Option<boo
                 // Consume only timer descriptors; no fake timer callback or
                 // archive ACK is needed to drive these genuine wave receipts.
                 handle.drain_timer_side_effects(256).await?;
+                if stop_issued {
+                    dispatch
+                        .budget_owner
+                        .as_mut()
+                        .unwrap()
+                        .observe_compaction_lane_wait_for_tests(lane_wait.clone());
+                }
                 let owner = ProviderWorkerOwner::compaction(&dispatch);
                 let waiter = handle.clone();
                 let admitted = spawn_owned_agent_provider_worker(
@@ -270,6 +333,26 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, stop_held: Option<boo
                     ),
                 );
                 assert!(admitted.is_some(), "original monitor admission refused");
+                if stop_issued {
+                    tokio::time::timeout(Duration::from_secs(10), async {
+                        issued.notified().await;
+                        lane_wait.notified().await;
+                    })
+                    .await
+                    .map_err(|_| {
+                        MezError::invalid_state("issued/refused sibling boundary unavailable")
+                    })?;
+                    assert_eq!(calls.load(Ordering::SeqCst), 1);
+                    assert_eq!(rows(&store, "budget_admissions"), 1);
+                    assert!(
+                        !handle
+                            .budget_compaction_claim_is_quiescent("%1".into(), generation)
+                            .await?
+                    );
+                    handle
+                        .execute_agent_shell_command(primary.clone(), "/stop".into())
+                        .await?;
+                }
                 if waves == 0
                     && let Some(stop) = stop_held
                 {
@@ -347,7 +430,7 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, stop_held: Option<boo
                         })?
                         .ok_or_else(|| MezError::invalid_state("missing original monitor"))?;
                 assert!(
-                    if stop_held == Some(true) {
+                    if stop_held == Some(true) || stop_issued {
                         matches!(&joined, Ok((_, Ok(None))))
                             || matches!(
                                 &joined,
@@ -400,7 +483,7 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, stop_held: Option<boo
                 )
                 .await?;
                 waves += 1;
-                if stop_held == Some(true) {
+                if stop_held == Some(true) || stop_issued {
                     let persistence = run_async_persistence_side_effect_service(
                         &handle,
                         AsyncRuntimeSideEffectServiceConfig {
@@ -589,10 +672,29 @@ async fn qualify(stop_between: bool, limits: BudgetLimits, stop_held: Option<boo
     let (waves, _, published) = exercise
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
         .unwrap();
-    assert_eq!(published, !stop_between && stop_held != Some(true));
+    assert_eq!(
+        published,
+        !stop_between && stop_held != Some(true) && !stop_issued
+    );
     assert_eq!(claims as usize, count);
     assert!(count > 0);
-    if stop_between || stop_held == Some(true) {
+    if stop_issued {
+        assert_eq!(
+            store.budget_account(&original_member.root).unwrap().known,
+            UsageTotals::default()
+        );
+        let snapshot: String = rusqlite::Connection::open(store.path())
+            .unwrap()
+            .query_row("SELECT snapshot FROM budget_attempts", [], |row| row.get(0))
+            .unwrap();
+        let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+        assert_eq!(
+            snapshot["terminal"],
+            serde_json::json!({"input":null,"output":null,"terminal":true}),
+            "local retirement cannot fabricate measured zero usage"
+        );
+    }
+    if stop_between || stop_held == Some(true) || stop_issued {
         assert_eq!(waves, 1);
         assert!(restored.is_none());
     } else {
