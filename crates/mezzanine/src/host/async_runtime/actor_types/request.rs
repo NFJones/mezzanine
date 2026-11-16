@@ -1064,6 +1064,11 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         window: std::sync::Weak<()>,
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Describes older same-root ordering custody, without native authorization.
+    BudgetInitialAdmissionContended {
+        work: crate::runtime::RuntimeBudgetAttemptWork,
+        reply: oneshot::Sender<Result<bool>>,
+    },
     /// Parks the original positively held provider claim. False means bounded
     /// timer capacity is unavailable before any wait mutation, not success.
     ParkBudgetProviderClaim {
@@ -1826,6 +1831,7 @@ impl AsyncRuntimeRequest {
             | Self::ParkBudgetAuxiliaryClaim { .. }
             | Self::ResumeBudgetAuxiliaryClaim { .. }
             | Self::SelectBudgetReconsideration { .. }
+            | Self::BudgetInitialAdmissionContended { .. }
             | Self::ParkBudgetProviderClaim { .. }
             | Self::ReacquireBudgetProviderClaim { .. }
             | Self::AgentCompactionClaimIsCurrent { .. }

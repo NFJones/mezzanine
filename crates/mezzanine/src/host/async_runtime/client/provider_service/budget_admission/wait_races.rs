@@ -26,23 +26,23 @@ fn budget_wait_capacity_count_cycle_is_not_an_unchanged_refusal() {
     assert!(reconsider_changed_hold(
         &after_other_root_retired,
         Some(&before_retry),
-        BudgetAdmissionHold::Capacity
+        Some(BudgetAdmissionHold::Capacity)
     ));
     assert!(!reconsider_changed_hold(
         &before_retry,
         Some(&before_retry),
-        BudgetAdmissionHold::OutstandingExposure
+        Some(BudgetAdmissionHold::OutstandingExposure)
     ));
     let mut full = before_retry.clone();
     full.outstanding_attempts = 4096;
     assert!(!reconsider_changed_hold(
         &full,
         Some(&before_retry),
-        BudgetAdmissionHold::Capacity
+        Some(BudgetAdmissionHold::Capacity)
     ));
     assert!(!reconsider_changed_hold(
         &full,
         None,
-        BudgetAdmissionHold::Capacity
+        Some(BudgetAdmissionHold::Capacity)
     ));
 }

@@ -240,8 +240,14 @@ Family refusal rotates the candidate and releases the window; dead, retired or
 paused candidates cannot remain a ready head. Unlimited requests bypass this
 window and independent roots do not share one. Existing family capacity, timers,
 human holds, native admission and final send fences remain authoritative.
-This orders already-held requests within one runtime, not initial requests or
-cross-runtime competitors. Whole-root inference fairness, memory capacity
+Fresh waiter-backed attempts first observe actor-local ordering custody. If an
+older same-root ready/selected owner is live, the fresh attempt joins the same
+park/select/resume path in a distinct local queued state, not a fabricated native
+hold. Queuing writes no native registration or expense and grants no permission;
+Stop still fences its eventual send. Uncontended observations retain the direct
+native path, and later waiters do not retroactively revoke them. This does not
+prove continuous-arrival starvation freedom or cross-runtime fairness.
+Whole-root inference fairness, memory capacity
 release/fair requeue, root-wide effect gates and production membership activation
 remain unfinished; compaction's retained-wave lease suspension is separate.
 

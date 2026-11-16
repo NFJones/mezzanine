@@ -19,6 +19,7 @@ use tokio::{sync::Mutex, task::JoinHandle};
 
 #[derive(Debug)]
 enum Outcome {
+    Queued,
     Grant(BudgetSendPermit),
     Evidence(BudgetAdmissionOutcome),
     Held(BudgetAdmissionHold),
@@ -27,6 +28,7 @@ enum Outcome {
 impl Outcome {
     fn capture(result: RuntimeBudgetAttemptAdmission) -> Self {
         match result {
+            RuntimeBudgetAttemptAdmission::Queued => Self::Queued,
             RuntimeBudgetAttemptAdmission::Authorized(permit) => Self::Grant(permit.into_native()),
             RuntimeBudgetAttemptAdmission::PreviouslyAuthorized(outcome) => Self::Evidence(outcome),
             RuntimeBudgetAttemptAdmission::Held(reason) => Self::Held(reason),
@@ -70,8 +72,9 @@ pub(crate) struct RuntimeBudgetAdmissionWork {
     shared: SharedAdmission,
 }
 
-/// Sealed, revocable evidence of an observed nonwriting hold on one original
-/// attempt. It supplies no grant, retry, or scheduler-resume authority. The
+/// Sealed, revocable capture of a local unstarted queue or observed nonwriting
+/// native hold on one original attempt. It supplies no native refusal evidence
+/// for a local queue, nor grant, retry, or scheduler-resume authority. The
 /// actor must still validate its current claim and original membership owner.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBudgetHeldAttempt {
@@ -163,13 +166,16 @@ impl RuntimeBudgetAdmissionWork {
         Self { work, shared }
     }
 
-    /// Capture only an already joined, positively nonwriting original hold.
-    /// No store read or writer starts here; cancellation cannot lose native
-    /// work. All clones share the same epoch until explicit reconsideration.
+    /// Capture a local unstarted queue or joined nonwriting native hold.
+    /// Local queuing supplies no native refusal/grant evidence. All clones
+    /// share the same epoch until explicit native authorization.
     pub(crate) async fn capture_held(&self) -> Result<RuntimeBudgetHeldAttempt> {
         let mut state = self.shared.0.lock().await;
         if state.recovered.is_some()
-            || !matches!(state.writer, Writer::Completed(Ok(Outcome::Held(_))))
+            || !matches!(
+                state.writer,
+                Writer::Completed(Ok(Outcome::Held(_) | Outcome::Queued))
+            )
         {
             return Err(MezError::invalid_state(
                 "budget parking requires original hold",
@@ -182,7 +188,7 @@ impl RuntimeBudgetAdmissionWork {
         })
     }
 
-    /// Observe current dependencies only after a positively nonwriting hold.
+    /// Observe dependencies for a local queue or positively nonwriting hold.
     /// Retains the actual reader across cancellation; clones join that reader
     /// instead of spawning replacements. Caller owns pacing, fair reacquisition
     /// and lifecycle checks; this method never retries authorization or sends.
@@ -198,7 +204,10 @@ impl RuntimeBudgetAdmissionWork {
     {
         let mut state = self.shared.0.lock().await;
         if state.recovered.is_some()
-            || !matches!(state.writer, Writer::Completed(Ok(Outcome::Held(_))))
+            || !matches!(
+                state.writer,
+                Writer::Completed(Ok(Outcome::Held(_) | Outcome::Queued))
+            )
         {
             return Err(MezError::invalid_state(
                 "budget wait observation requires original hold",
@@ -210,6 +219,19 @@ impl RuntimeBudgetAdmissionWork {
         observe_wait_query(&mut state)
             .await?
             .ok_or_else(|| MezError::invalid_state("budget wait observation unavailable"))
+    }
+
+    /// Queue this original before any native writer. Only the existing actor
+    /// park/select/resume path may then proceed to native authorization. This
+    /// does not allocate durable registration, numeric hold or send authority.
+    pub(crate) async fn queue_initial(&self) -> Result<RuntimeBudgetAttemptAdmission> {
+        let mut state = self.shared.0.lock().await;
+        match state.writer {
+            Writer::Unstarted => state.writer = Writer::Completed(Ok(Outcome::Queued)),
+            Writer::Completed(Ok(Outcome::Queued)) => {}
+            _ => return Err(MezError::conflict("initial budget work already started")),
+        }
+        self.take_outcome(&mut state)
     }
 
     /// Delivers at most one original permit. Clones share its actual worker;
@@ -277,6 +299,7 @@ impl RuntimeBudgetAdmissionWork {
             Writer::Completed(Ok(Outcome::Evidence(outcome))) => Ok(
                 RuntimeBudgetAttemptAdmission::PreviouslyAuthorized(outcome.clone()),
             ),
+            Writer::Completed(Ok(Outcome::Queued)) => Ok(RuntimeBudgetAttemptAdmission::Queued),
             Writer::Completed(Ok(Outcome::Held(reason))) => {
                 Ok(RuntimeBudgetAttemptAdmission::Held(*reason))
             }
@@ -287,7 +310,7 @@ impl RuntimeBudgetAdmissionWork {
         }
     }
 
-    /// Explicitly reconsider ONLY an observed native hold, which wrote nothing.
+    /// Start an unstarted local queue or reconsider a joined nonwriting hold.
     /// No internal timer/loop, fresh identity, or retry of an uncertain grant.
     pub(crate) async fn retry_held(&self) -> Result<RuntimeBudgetAttemptAdmission> {
         self.retry_held_with_window(None).await
@@ -322,7 +345,10 @@ impl RuntimeBudgetAdmissionWork {
         observe_wait_query(&mut state).await?;
         observe_query(&mut state).await?;
         if state.recovered.is_some()
-            || !matches!(state.writer, Writer::Completed(Ok(Outcome::Held(_))))
+            || !matches!(
+                state.writer,
+                Writer::Completed(Ok(Outcome::Held(_) | Outcome::Queued))
+            )
         {
             return Err(MezError::invalid_state(
                 "budget authorization retry requires an observed hold",

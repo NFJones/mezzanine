@@ -166,6 +166,12 @@ async fn qualify(cancelled: bool) {
     let client = async {
         let title_future = Arc::new(());
         let memory_future = Arc::new(());
+        assert!(
+            !handle
+                .budget_initial_admission_contended(title_work.clone())
+                .await
+                .unwrap()
+        );
         handle
             .park_budget_auxiliary_claim(title_hold.clone(), Arc::downgrade(&title_future))
             .await
@@ -200,6 +206,12 @@ async fn qualify(cancelled: bool) {
             )
             .await
             .unwrap();
+        assert!(
+            handle
+                .budget_initial_admission_contended(title_work.clone())
+                .await
+                .unwrap()
+        );
         // Native reconsideration invalidates the prior positive hold before its
         // writer settles. Keeping the exact window must still exclude memory.
         let normal_window = (!cancelled).then(|| title_window.clone());
@@ -278,6 +290,14 @@ async fn qualify(cancelled: bool) {
             .await
             .unwrap();
         drop(memory_window);
+        // No selected window remains, but memory is still an eligible ready
+        // original. Fresh arrivals must not take the direct native path.
+        assert!(
+            handle
+                .budget_initial_admission_contended(title_work.clone())
+                .await
+                .unwrap()
+        );
         let stale_window = Arc::new(());
         let stale = handle
             .select_budget_reconsideration(
@@ -291,6 +311,12 @@ async fn qualify(cancelled: bool) {
             .execute_agent_shell_command(primary, "/stop".into())
             .await
             .unwrap();
+        assert!(
+            !handle
+                .budget_initial_admission_contended(title_work.clone())
+                .await
+                .unwrap()
+        );
         let retired_window = Arc::new(());
         let retired = handle
             .select_budget_reconsideration(

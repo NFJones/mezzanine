@@ -16926,8 +16926,13 @@ new title admission. Human-paused, retired, dead or revoked waiters MUST NOT
 block an eligible title. Duplicate resume MUST NOT reserve capacity twice.
 These title-specific rules do not establish cross-family/root-wide inference
 fairness or activate production budgets.
-For already-held finite-root requests within one runtime, descriptive native
-progress MAY enter bounded cross-family reconsideration ordering. Metadata MUST
+For finite-root requests within one runtime, descriptive native progress MAY
+enter bounded cross-family reconsideration ordering. A fresh waiter-backed
+attempt observing older live same-root ready/selected custody through the actor
+MUST join that ordering before starting native authorization. Local queuing MUST
+remain distinct from a native refusal: it creates no registration, permit or
+expense. An uncontended actor observation preserves the direct native path;
+later waiters do not retroactively revoke that earlier observation. Metadata MUST
 retain only weak original hold/future captures, not native or expense owners or
 a second runnable queue. Only current quiescent, unpaused original claims qualify.
 One selected window per root MUST survive family adoption and the original native
@@ -16941,8 +16946,8 @@ paused candidates MUST NOT strand an eligible head. Unlimited requests MUST
 bypass this window and independent roots MUST NOT share it. Ordering metadata
 MUST remain bounded at 4096 live candidates/windows with checked monotonic order;
 capacity refusal MUST retain original caller custody without authorization.
-This does not qualify fairness against fresh initial requests or cross-runtime
-competitors, replace family schedulers/timer adoption, or activate budgeting.
+This does not establish continuous-arrival starvation freedom or cross-runtime
+fairness, replace family schedulers/timer adoption, or activate budgeting.
 Human `/stop` MUST retire queued and claimed generated-title publication for the
 invoking conversation even when no ordinary turn is live. Original late-expense
 custody MUST survive; lifting budget policy MUST NOT revive that stopped title.

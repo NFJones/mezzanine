@@ -1059,6 +1059,15 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Observe older ordering custody; this grants no native send permission.
+    pub(crate) async fn budget_initial_admission_contended(
+        &self,
+        work: crate::runtime::RuntimeBudgetAttemptWork,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::BudgetInitialAdmissionContended { work, reply })
+            .await?
+    }
+
     /// Request ordering only, retaining both tokens in the original producer.
     pub(crate) async fn select_budget_reconsideration(
         &self,

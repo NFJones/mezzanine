@@ -545,6 +545,9 @@ impl RuntimeBudgetAttemptWork {
     allow(dead_code, reason = "physical-send driver integration is downstream")
 )]
 pub(crate) enum RuntimeBudgetAttemptAdmission {
+    /// Locally queued before any native writer. This is not a durable hold,
+    /// grant, registration, or evidence that the current policy is finite.
+    Queued,
     Authorized(RuntimeBudgetSendPermit),
     PreviouslyAuthorized(BudgetAdmissionOutcome),
     Held(BudgetAdmissionHold),

@@ -9,6 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 mod combined;
 mod descendants;
+mod fresh;
 
 #[tokio::test]
 async fn budget_reconsideration_physical_descendant_and_root_share_finite_window() {

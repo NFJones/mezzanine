@@ -67,6 +67,41 @@ fn grants(scene: &Scene) -> i64 {
 }
 
 #[tokio::test]
+async fn runtime_budget_admission_local_queue_is_not_native_evidence_or_permission() {
+    let (scene, owner, work) = case().await;
+    let admission = work.admission_owner();
+    for _ in 0..2 {
+        assert!(matches!(
+            admission.queue_initial().await.unwrap(),
+            RuntimeBudgetAttemptAdmission::Queued
+        ));
+    }
+    let _capture = admission.capture_held().await.unwrap();
+    assert!(admission.observe_held().await.unwrap().limits.is_some());
+    assert_eq!(admission.reconcile().await.unwrap(), None);
+    assert!(admission.retire_unused().await.unwrap().is_none());
+    // Neither a clone nor ordinary claim can silently start the queued writer.
+    assert!(matches!(
+        work.clone().admission_owner().claim().await.unwrap(),
+        RuntimeBudgetAttemptAdmission::Queued
+    ));
+    assert_eq!(grants(&scene), 0);
+    let attempts: i64 = rusqlite::Connection::open(scene.store.path())
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM budget_attempts", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(attempts, 0);
+    assert_eq!(
+        scene
+            .store
+            .budget_account(&owner.member.root)
+            .unwrap()
+            .known,
+        UsageTotals::default()
+    );
+}
+
+#[tokio::test]
 async fn runtime_budget_admission_cancelled_waiters_share_one_worker_and_one_permit() {
     let (scene, owner, work) = case().await;
     let admission = work.admission_owner();

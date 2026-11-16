@@ -317,7 +317,7 @@ struct Source {
 fn reconsider_changed_hold(
     state: &crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState,
     previous: Option<&crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState>,
-    reason: crate::storage::token_usage::budget::admission::BudgetAdmissionHold,
+    reason: Option<crate::storage::token_usage::budget::admission::BudgetAdmissionHold>,
 ) -> bool {
     use crate::storage::token_usage::budget::admission::{
         BudgetAdmissionHold, MAX_OUTSTANDING_BUDGET_ATTEMPTS,
@@ -329,7 +329,7 @@ fn reconsider_changed_hold(
         && (previous != Some(state)
             || matches!(
                 reason,
-                BudgetAdmissionHold::Capacity | BudgetAdmissionHold::StorageContention
+                Some(BudgetAdmissionHold::Capacity | BudgetAdmissionHold::StorageContention)
             ))
 }
 
@@ -346,7 +346,7 @@ impl Source {
         handle: &AsyncRuntimeSessionHandle,
         owner: &crate::runtime::RuntimeBudgetAdmissionWork,
         capture: crate::runtime::RuntimeBudgetHeldAttempt,
-        reason: crate::storage::token_usage::budget::admission::BudgetAdmissionHold,
+        reason: Option<crate::storage::token_usage::budget::admission::BudgetAdmissionHold>,
         previous: Option<&crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState>,
     ) -> Result<(
         crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState,
@@ -604,19 +604,51 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                 phase.compaction_reader = Some(reader);
             }
             let owner = self.0.work.admission_owner();
-            let mut admission = owner
-                .claim()
-                .await
-                .map_err(|_| suspended("original budget authorization unavailable"))?;
+            let contended = match &self.0.waiter {
+                Some(handle) => handle
+                    .budget_initial_admission_contended(self.0.work.clone())
+                    .await
+                    .map_err(|_| suspended("original budget ordering unavailable"))?,
+                None => false,
+            };
+            let mut admission = if contended {
+                owner.queue_initial().await
+            } else {
+                owner.claim().await
+            }
+            .map_err(|_| suspended("original budget authorization unavailable"))?;
+            // Parallel nodes share one compaction claim. A read-only unlimited
+            // snapshot lets them retain the existing concurrent lane, but never
+            // replaces the native transaction's current-policy check. Finite or
+            // unavailable policy uses exclusive original-claim parking below.
+            if self.0.compaction_lane.is_some()
+                && matches!(admission, RuntimeBudgetAttemptAdmission::Queued)
+                && owner
+                    .observe_held()
+                    .await
+                    .map_err(|_| suspended("original budget ordering read unavailable"))?
+                    .limits
+                    .is_some_and(|limits| !limits.requires_serial_inference())
+            {
+                admission = owner
+                    .retry_held()
+                    .await
+                    .map_err(|_| suspended("original budget authorization unavailable"))?;
+            }
             let mut previous = None;
             let mut storage_reconsidered = false;
-            while let RuntimeBudgetAttemptAdmission::Held(reason) = &admission {
+            loop {
+                let reason = match &admission {
+                    RuntimeBudgetAttemptAdmission::Queued => None,
+                    RuntimeBudgetAttemptAdmission::Held(reason) => Some(*reason),
+                    _ => break,
+                };
                 use crate::storage::token_usage::budget::admission::BudgetAdmissionHold;
                 let Some(handle) = &self.0.waiter else { break };
-                if *reason == BudgetAdmissionHold::RegistrationOnly {
+                if reason == Some(BudgetAdmissionHold::RegistrationOnly) {
                     break;
                 }
-                if *reason == BudgetAdmissionHold::StorageContention {
+                if reason == Some(BudgetAdmissionHold::StorageContention) {
                     if storage_reconsidered {
                         #[cfg(test)]
                         self.0.work.note_storage_exhaustion_for_tests();
@@ -631,8 +663,8 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                             .phase
                             .lock()
                             .map_err(|_| suspended("budget attempt custody unavailable"))?;
-                        // claim/retry has joined and positively refused this
-                        // unissued request. Never upgrade while its writer may
+                        // This request is locally unstarted or claim/retry has
+                        // joined with a positive refusal. Never upgrade while a writer may
                         // still authorize a send. Queued siblings hold no read
                         // guard, so Tokio's fair lock cannot deadlock the wave.
                         phase.compaction_reader.take();
@@ -655,7 +687,7 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                     .map_err(|_| suspended("original budget hold custody unavailable"))?;
                 let (state, reconsideration_window) = self
                     .0
-                    .wait_for_reacquisition(handle, &owner, capture, *reason, previous.as_ref())
+                    .wait_for_reacquisition(handle, &owner, capture, reason, previous.as_ref())
                     .await
                     .map_err(|_| suspended("original budget wait unavailable"))?;
                 previous = Some(state);

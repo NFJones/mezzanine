@@ -23,7 +23,7 @@ async fn budget_reconsideration_combined_independent_root_progresses_while_root_
 
 /// Each endpoint owns exactly one complete HTTP exchange. Distinct servers
 /// allow independent roots and unlimited requests to make genuine progress.
-async fn endpoint(
+pub(super) async fn endpoint(
     title: bool,
     sends: Arc<AtomicUsize>,
 ) -> (

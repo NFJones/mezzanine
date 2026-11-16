@@ -1,9 +1,10 @@
-//! Order already-held native reconsideration across the existing claim families.
+//! Order local unstarted and native-held attempts across existing claim families.
 //! No request payload, native permit, runnable task or expense owner lives here.
 //! Weak original-future tokens bound retention; a separate weak selected window
 //! lasts through native authorization even when that writer revokes its hold
 //! epoch. Family capacity/timer adoption and native policy remain independent.
-//! Fresh initial attempts and cross-runtime fairness are not governed here.
+//! Native transactions remain the only send authority. Cross-runtime fairness
+//! is not governed by this runtime-local ordering metadata.
 
 use super::{
     RuntimeSessionService,
@@ -41,6 +42,30 @@ impl ReconsiderationOrder {
 }
 
 impl RuntimeSessionService {
+    /// Actor-ordered contention observation, never native permission. A fresh
+    /// attempt observing an older live window/ready owner must join this same
+    /// fair queue. Absence preserves the ordinary native transaction path;
+    /// a request ordered before a later waiter is not retroactively revoked.
+    pub(crate) fn budget_initial_admission_contended(
+        &self,
+        work: &super::request::RuntimeBudgetAttemptWork,
+    ) -> bool {
+        let ordering = &self.agent.budget_memberships.reconsideration;
+        ordering
+            .selected
+            .get(work.root())
+            .is_some_and(|window| window.upgrade().is_some())
+            || ordering.ready.iter().any(|entry| {
+                entry.future.upgrade().is_some()
+                    && entry.capture.upgrade().is_some_and(|capture| {
+                        capture.root() == work.root()
+                            && self
+                                .budget_reconsideration_eligible(&capture)
+                                .unwrap_or(false)
+                    })
+            })
+    }
+
     /// Exact claim eligibility, not native permission. Paused/dead/retired heads
     /// cannot strand another family's original waiter.
     fn budget_reconsideration_eligible(&self, capture: &RuntimeBudgetHeldAttempt) -> Result<bool> {

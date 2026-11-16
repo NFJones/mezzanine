@@ -3195,6 +3195,10 @@ impl AsyncRuntimeSessionActor {
                 );
                 false
             }
+            AsyncRuntimeRequest::BudgetInitialAdmissionContended { work, reply } => {
+                let _ = reply.send(Ok(self.service.budget_initial_admission_contended(&work)));
+                false
+            }
             AsyncRuntimeRequest::ResumeBudgetAuxiliaryClaim { capture, reply } => {
                 let result = if capture.compaction_subject().is_some() {
                     if self.available_committed_side_effect_capacity() < 2 {
