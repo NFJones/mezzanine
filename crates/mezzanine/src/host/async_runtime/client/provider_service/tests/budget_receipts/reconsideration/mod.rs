@@ -7,6 +7,7 @@ use crate::integrations::http::ReqwestProviderHttpTransport;
 use mez_agent::token_budget::TokenLimit;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+mod combined;
 mod descendants;
 
 #[tokio::test]
