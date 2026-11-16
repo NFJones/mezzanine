@@ -43,6 +43,9 @@ async fn budget_production_dispatch_registers_actual_request_before_physical_sen
 #[derive(Clone, Copy, Debug)]
 enum RequestCase {
     Execution,
+    Responses,
+    DeepSeek,
+    Anthropic,
     Router,
     Compaction,
     Memory,
@@ -68,7 +71,9 @@ impl RequestCase {
 
     fn purposes(self) -> Vec<&'static str> {
         match self {
-            Self::Execution => vec!["Execution"],
+            Self::Execution | Self::Responses | Self::DeepSeek | Self::Anthropic => {
+                vec!["Execution"]
+            }
             Self::Router => vec!["Routing"],
             Self::Compaction => vec!["Compaction"],
             Self::Memory => vec!["Memory"],
@@ -116,6 +121,24 @@ async fn qualify(input_limit: u64, case: RequestCase) {
     .await;
 }
 
+/// Exercise each actual inference adapter through production dispatch's own
+/// captured request source, not an already-issued fixture receipt factory.
+/// Zero must produce no HTTP; equality and allowance retain one exact 11/3
+/// exchange and its original durable settlement.
+#[tokio::test]
+async fn budget_production_dispatch_all_unary_dialects_obey_native_admission() {
+    for case in [
+        RequestCase::Execution,
+        RequestCase::Responses,
+        RequestCase::DeepSeek,
+        RequestCase::Anthropic,
+    ] {
+        for limit in [0, 11, 100] {
+            Box::pin(qualify(limit, case)).await;
+        }
+    }
+}
+
 async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: CompactionRetirement) {
     let retire_compaction = retirement != CompactionRetirement::None;
     let cold = matches!(case, RequestCase::ColdSummaryRepair);
@@ -139,15 +162,50 @@ async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: Com
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     dispatch.model_profile.model = "actual-request-model".into();
-    dispatch.provider = crate::runtime::RuntimeAgentProviderDispatchProvider::OpenAiCompatible(
-        OpenAiCompatibleChatCompletionsProvider::without_auth(ReqwestProviderHttpTransport)
-            .unwrap()
-            .with_provider_id("local-chat")
-            .unwrap()
-            .with_streaming_options_for_test(false)
-            .unwrap()
-            .with_endpoint(endpoint),
-    );
+    use crate::integrations::agent::provider::{
+        AnthropicMessagesProvider, DeepSeekChatCompletionsProvider, OpenAiResponsesProvider,
+    };
+    use crate::runtime::RuntimeAgentProviderDispatchProvider as Provider;
+    dispatch.provider = match case {
+        RequestCase::Responses => Provider::OpenAi(
+            OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+                "fixture-key",
+                &endpoint,
+                10_000,
+                Default::default(),
+                false,
+                ReqwestProviderHttpTransport,
+            )
+            .unwrap(),
+        ),
+        RequestCase::DeepSeek => Provider::DeepSeek(
+            DeepSeekChatCompletionsProvider::without_auth(ReqwestProviderHttpTransport)
+                .unwrap()
+                .with_endpoint(endpoint)
+                .with_stream(false),
+        ),
+        RequestCase::Anthropic => Provider::Anthropic(
+            AnthropicMessagesProvider::without_auth(ReqwestProviderHttpTransport)
+                .unwrap()
+                .with_endpoint(endpoint)
+                .with_stream(false),
+        ),
+        _ => Provider::OpenAiCompatible(
+            OpenAiCompatibleChatCompletionsProvider::without_auth(ReqwestProviderHttpTransport)
+                .unwrap()
+                .with_provider_id("local-chat")
+                .unwrap()
+                .with_streaming_options_for_test(false)
+                .unwrap()
+                .with_endpoint(endpoint),
+        ),
+    };
+    if matches!(
+        case,
+        RequestCase::Responses | RequestCase::DeepSeek | RequestCase::Anthropic
+    ) {
+        dispatch.model_profile.provider = dispatch.provider.provider_id().into();
+    }
     if matches!(case, RequestCase::Router) {
         let target = |size: &str| mez_agent::AutoSizingTargetProfile {
             size: size.into(),
@@ -500,6 +558,10 @@ async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: Com
             };
             let (status, body) = if summary && index == 0 {
                 ("400 Bad Request", serde_json::json!({"error":{"message":"fixture schema refusal","type":"invalid_request_error"},"usage":{"prompt_tokens":11,"completion_tokens":3}}).to_string())
+            } else if matches!(case, RequestCase::Responses) {
+                ("200 OK", serde_json::json!({"model":"provider-reported-model","status":"completed","output_text":text,"usage":{"input_tokens":11,"output_tokens":3}}).to_string())
+            } else if matches!(case, RequestCase::Anthropic) {
+                ("200 OK", serde_json::json!({"id":"fixture-message","type":"message","role":"assistant","model":"provider-reported-model","stop_reason":"tool_use","content":[{"type":"tool_use","id":"fixture-tool","name":mez_agent::MAAP_ACTION_BATCH_TOOL_NAME,"input":serde_json::from_str::<serde_json::Value>(&text).unwrap()}],"usage":{"input_tokens":11,"output_tokens":3}}).to_string())
             } else {
                 ("200 OK", serde_json::json!({"model":"provider-reported-model","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":text}}],"usage":{"prompt_tokens":11,"completion_tokens":3}}).to_string())
             };
@@ -620,8 +682,13 @@ async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: Com
         [], |row| row.get(0),
     ).unwrap();
     drop((exit, handle, pending));
-    if cold {
-        assert_eq!(outstanding, 0, "cold summary retained original exposure");
+    if cold
+        || matches!(
+            case,
+            RequestCase::Responses | RequestCase::DeepSeek | RequestCase::Anthropic
+        )
+    {
+        assert_eq!(outstanding, 0, "dispatch retained original exposure");
     }
     root.cleanup();
     let served = served.expect("loopback server did not retire").unwrap();
@@ -641,7 +708,11 @@ async fn qualify_retirement(input_limit: u64, case: RequestCase, retirement: Com
             // bounded rejection. Native zero-send/zero-expense remains proved.
             assert_eq!(error.message(), "provider_error");
         } else {
-            assert_eq!(error.kind(), MezErrorKind::BudgetSuspended);
+            assert_eq!(
+                error.kind(),
+                MezErrorKind::BudgetSuspended,
+                "{case:?}: {error:?}"
+            );
         }
         assert_eq!(known, UsageTotals::default());
         if retire_compaction {
