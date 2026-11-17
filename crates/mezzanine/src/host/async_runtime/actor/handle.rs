@@ -1267,6 +1267,23 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Fault/observation seam only; never supplies execution or replay authority.
+    #[cfg(test)]
+    pub(crate) async fn provider_persistence_audit_probe_for_tests(
+        &self,
+        expected: crate::runtime::RuntimeAgentProviderPersistenceOutcome,
+        audit_path: Option<std::path::PathBuf>,
+    ) -> Result<bool> {
+        self.request(
+            |reply| AsyncRuntimeRequest::ProviderPersistenceAuditProbeForTests {
+                expected: Box::new(expected),
+                audit_path,
+                reply,
+            },
+        )
+        .await
+    }
+
     #[cfg(test)]
     pub(crate) async fn inject_budget_activity_fault(
         &self,

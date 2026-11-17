@@ -269,16 +269,27 @@ impl RuntimeSessionService {
         };
         let model_profile = outcome.model_profile.clone();
         let provider_id = outcome.provider_id.clone();
+        // The worker has already produced these results. Keep them, and the
+        // source before any fallible audit/presentation/continuation, even if
+        // those later stages cannot adopt the local execution. Read-only
+        // fork/bookkeeping phases retain their existing failure disposition.
+        let failure_source = (!outcome.memory_results.is_empty()
+            || !outcome.issue_results.is_empty())
+        .then(|| self.capture_provider_persistence_failure_source(&turn, &outcome));
         // Keep the phase continuation off the enclosing actor future's stack.
         let applied = match Box::pin(self.apply_agent_provider_persistence_outcome(outcome)).await {
             Ok(_) => true,
             Err(error) => {
-                self.fail_agent_turn_after_provider_completion_application_error(
-                    &turn,
-                    &provider_id,
-                    Some(&model_profile),
-                    &error,
-                );
+                if let Some(source) = failure_source {
+                    self.retain_provider_persistence_adoption_refusal(source, &error);
+                } else {
+                    self.fail_agent_turn_after_provider_completion_application_error(
+                        &turn,
+                        &provider_id,
+                        Some(&model_profile),
+                        &error,
+                    );
+                }
                 true
             }
         };

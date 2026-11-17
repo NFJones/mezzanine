@@ -16639,6 +16639,14 @@ issuance or authorize replay. This delivery fence alone does not establish
 per-action budget authority, retained partial-result custody, or physical worker
 retirement after observation is dropped.
 
+After accepting a memory/issue persistence outcome, the actor MUST retain the
+exact issued outcome and pre-adoption source across fallible audit, presentation
+and continuation. Adoption refusal MUST preserve those results and the causal
+error without fabricating replacement execution, audit or publication success.
+An existing first-refusal source/cause MUST NOT be overwritten. Retained copies
+MUST NOT authorize replay or continuation. This accepted-outcome custody does not
+establish worker-side partial-result retention or acceptance of stale outcomes.
+
 The staged root activity observer MAY capture an already activated native binding
 and perform one coalesced read per namespace/root off actor. Adoption MUST match
 the original membership allocation, repository and query lifetime; a stale read

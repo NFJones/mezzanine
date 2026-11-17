@@ -1076,6 +1076,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         refresh: bool,
         reply: oneshot::Sender<Result<(bool, bool)>>,
     },
+    /// Installs a real required-disabled audit fault or observes exact custody.
+    #[cfg(test)]
+    ProviderPersistenceAuditProbeForTests {
+        expected: Box<crate::runtime::RuntimeAgentProviderPersistenceOutcome>,
+        audit_path: Option<std::path::PathBuf>,
+        reply: oneshot::Sender<bool>,
+    },
     #[cfg(test)]
     InjectBudgetActivityFault {
         turn_id: String,
@@ -1948,6 +1955,8 @@ impl AsyncRuntimeRequest {
             Self::InjectBudgetActivityFault { .. } => Family::Provider,
             #[cfg(test)]
             Self::BudgetMcpSchemaProbeForTests { .. } => Family::Provider,
+            #[cfg(test)]
+            Self::ProviderPersistenceAuditProbeForTests { .. } => Family::Provider,
             #[cfg(test)]
             Self::BudgetRememberClaimIsQuiescent { .. } => Family::Provider,
             #[cfg(test)]

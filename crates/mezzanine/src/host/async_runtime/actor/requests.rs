@@ -3272,6 +3272,29 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             #[cfg(test)]
+            AsyncRuntimeRequest::ProviderPersistenceAuditProbeForTests {
+                expected,
+                audit_path,
+                reply,
+            } => {
+                if let Some(path) = audit_path {
+                    self.service
+                        .set_audit_log(crate::security::audit::AuditLog::new(
+                            crate::security::audit::AuditConfig {
+                                enabled: false,
+                                required: true,
+                                path,
+                                hash_chain: true,
+                            },
+                        ));
+                }
+                let _ = reply.send(
+                    self.service
+                        .retained_persistence_outcome_matches_for_tests(&expected),
+                );
+                false
+            }
+            #[cfg(test)]
             AsyncRuntimeRequest::InjectBudgetActivityFault {
                 turn_id,
                 panic_reader,

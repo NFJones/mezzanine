@@ -8,6 +8,7 @@
 //! use the released provider capacity and control service.
 
 use super::*;
+use crate::runtime::RuntimeAgentProviderPersistenceOutcome;
 
 /// Immutable pre-report source. Copies never acquire execution/publication
 /// rights and are never installed as a replacement live context.
@@ -17,6 +18,8 @@ pub(super) struct ProviderFailureSource {
     execution: Option<AgentTurnExecution>,
     history: Option<std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
     imported_high_water: u64,
+    // Diagnostic custody only; never restored or submitted for execution.
+    persistence_outcome: Option<Box<RuntimeAgentProviderPersistenceOutcome>>,
 }
 
 /// Required failure evidence remains available even when audit, transcript or
@@ -37,6 +40,10 @@ impl std::fmt::Debug for ProviderFailureSource {
             .field("has_execution", &self.execution.is_some())
             .field("has_history", &self.history.is_some())
             .field("imported_high_water", &self.imported_high_water)
+            .field(
+                "has_persistence_outcome",
+                &self.persistence_outcome.is_some(),
+            )
             .finish()
     }
 }
@@ -67,7 +74,78 @@ impl RuntimeSessionService {
             execution: self.agent_turn_executions().get(turn_id).cloned(),
             history: self.agent_turn_history_source(turn_id).cloned(),
             imported_high_water: self.agent_turn_imported_history_sequence_high_water(turn_id),
+            persistence_outcome: None,
         })
+    }
+
+    /// Keeps already-issued worker results alongside the pre-adoption source.
+    /// This is refusal evidence only: neither copy may be installed as a live
+    /// execution, used to retry writes, or treated as an audit/publication ACK.
+    pub(in crate::runtime::agent) fn capture_provider_persistence_failure_source(
+        &self,
+        turn: &AgentTurnRecord,
+        outcome: &RuntimeAgentProviderPersistenceOutcome,
+    ) -> ProviderFailureSource {
+        ProviderFailureSource {
+            turn: turn.clone(),
+            context: self.agent_turn_contexts().get(&turn.turn_id).cloned(),
+            execution: self.agent_turn_executions().get(&turn.turn_id).cloned(),
+            history: self.agent_turn_history_source(&turn.turn_id).cloned(),
+            imported_high_water: self
+                .agent_turn_imported_history_sequence_high_water(&turn.turn_id),
+            persistence_outcome: Some(Box::new(outcome.clone())),
+        }
+    }
+
+    /// Contains an accepted outcome's adoption failure without regenerating a
+    /// failed execution. An inner stage may already have retained a refusal;
+    /// preserve its first source/cause and fill missing outcome custody only.
+    pub(in crate::runtime::agent) fn retain_provider_persistence_adoption_refusal(
+        &mut self,
+        mut source: ProviderFailureSource,
+        error: &MezError,
+    ) {
+        if let Some(refusal) = self
+            .agent
+            .provider_failure_refusals
+            .get_mut(&source.turn.turn_id)
+        {
+            if refusal.source.turn.agent_id == source.turn.agent_id
+                && refusal.source.turn.pane_id == source.turn.pane_id
+                && refusal.source.turn.conversation_id == source.turn.conversation_id
+                && refusal.source.persistence_outcome.is_none()
+            {
+                refusal.source.persistence_outcome = source.persistence_outcome.take();
+            }
+            return;
+        }
+        self.retain_provider_failure_refusal(
+            source,
+            error,
+            MezError::invalid_state(
+                "issued provider persistence results retained after adoption refusal; automatic replay disabled",
+            ),
+        );
+    }
+
+    /// Compares original retained evidence without exposing it or granting replay.
+    #[cfg(test)]
+    pub(crate) fn retained_persistence_outcome_matches_for_tests(
+        &self,
+        expected: &RuntimeAgentProviderPersistenceOutcome,
+    ) -> bool {
+        self.agent
+            .provider_failure_refusals
+            .get(&expected.turn.turn_id)
+            .filter(|refusal| {
+                refusal.cause.kind() == crate::error::MezErrorKind::Forbidden
+                    && refusal
+                        .cause
+                        .message()
+                        .contains("audit logging is required but disabled")
+            })
+            .and_then(|refusal| refusal.source.persistence_outcome.as_deref())
+            == Some(expected)
     }
 
     /// Tests only actual retained refusal ownership, never error text.

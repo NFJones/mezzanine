@@ -403,6 +403,15 @@ is also inert. Failure does not reset issuance or authorize replay. This deliver
 fence does not retain partial results, qualify budget admission, or prove physical
 worker retirement after a caller drops observation.
 
+When the actor accepts a memory/issue worker outcome, it retains that exact
+outcome and the pre-adoption source across fallible audit, presentation and
+continuation steps. Adoption failure leaves a turn-local refusal with the
+original results and causal error, rather than generating a replacement failed
+execution. Existing first-refusal evidence is not overwritten. These retained
+copies confer no replay, audit, publication or continuation authority. This does
+not yet cover a worker that fails before delivering its accumulated results or
+an outcome rejected before current-owner acceptance.
+
 These internal allocation and accounting ports do **not** yet enable operational
 session budgets. The provider waiting, accounting and retirement paths above must
 still be assembled with root-wide activity inhibition and persistent policy/UI

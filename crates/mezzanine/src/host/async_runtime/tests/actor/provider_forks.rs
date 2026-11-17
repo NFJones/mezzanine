@@ -674,6 +674,7 @@ async fn async_actor_persistence_validates_complete_action_frame_before_writes()
         "none",
         "duplicate_work",
         "concurrent_work",
+        "adoption_audit",
         "missing",
         "payload",
         "duplicate_result",
@@ -825,7 +826,7 @@ async fn async_actor_persistence_validates_complete_action_frame_before_writes()
                     .id
                     .clear(),
                 "missing_batch" => work.execution.response.action_batch = None,
-                "none" | "duplicate_work" | "concurrent_work" => {}
+                "none" | "duplicate_work" | "concurrent_work" | "adoption_audit" => {}
                 _ => unreachable!(),
             }
             let repeated_work = work.clone();
@@ -912,12 +913,29 @@ async fn async_actor_persistence_validates_complete_action_frame_before_writes()
             } else {
                 0
             };
-            if matches!(fault, "none" | "duplicate_work" | "concurrent_work") {
+            if matches!(
+                fault,
+                "none" | "duplicate_work" | "concurrent_work" | "adoption_audit"
+            ) {
                 let outcome = outcome.unwrap();
                 assert_eq!(outcome.issue_results.len(), 2);
                 assert_eq!(outcome.memory_results.len(), 1);
                 assert_eq!(memory_count, 1);
                 assert_eq!(count, 2);
+                // The real stores have already committed. Only now change the
+                // audit writer: its actual policy refusal occurs during actor
+                // adoption, before the first memory result is assigned.
+                if fault == "adoption_audit" {
+                    assert!(
+                        !handle
+                            .provider_persistence_audit_probe_for_tests(
+                                outcome.clone(),
+                                Some(client_root.join("audit/events.jsonl")),
+                            )
+                            .await
+                            .unwrap()
+                    );
+                }
                 for (index, applied) in [1, 0].into_iter().enumerate() {
                     let mut batch = RuntimeEventBatch::new();
                     batch.push(RuntimeEvent::AgentProvider(
@@ -929,6 +947,15 @@ async fn async_actor_persistence_validates_complete_action_frame_before_writes()
                         handle.submit_runtime_events(batch).await.unwrap().applied,
                         applied,
                         "outcome adoption {index} must not repeat physical actions"
+                    );
+                }
+                if fault == "adoption_audit" {
+                    assert!(
+                        handle
+                            .provider_persistence_audit_probe_for_tests(outcome.clone(), None,)
+                            .await
+                            .unwrap(),
+                        "post-write adoption refusal lost original issued results"
                     );
                 }
                 for (file, sql, expected) in [
