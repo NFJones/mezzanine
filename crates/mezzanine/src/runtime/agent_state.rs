@@ -468,9 +468,41 @@ impl RuntimeAgentProviderPersistenceOwner {
     }
 }
 
+/// Clone-shared, single-use delivery identity for one persistence phase.
+///
+/// Claiming is permanent, including on validation or executor failure: replay
+/// must never be inferred from absence of an outcome. Equality is allocation
+/// identity and does not change when the worker claims it. This is an issuance
+/// fence, not budget/permission authority or custody of partial results.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RuntimeProviderPersistenceIssuance(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl RuntimeProviderPersistenceIssuance {
+    pub(crate) fn claim(&self) -> bool {
+        self.0
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_ok()
+    }
+}
+
+impl PartialEq for RuntimeProviderPersistenceIssuance {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for RuntimeProviderPersistenceIssuance {}
+
 /// Immutable actor-validated SQLite work for one provider completion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeAgentProviderPersistenceWork {
+    /// Original phase issuance; every cloned delivery shares this identity.
+    pub(crate) issuance: RuntimeProviderPersistenceIssuance,
     /// Running turn that owns every action in the execution.
     pub turn: AgentTurnRecord,
     /// Exact persistence settlement generation for rejecting late worker results.
@@ -510,6 +542,8 @@ pub struct RuntimeAgentProviderPersistenceWork {
 /// Actor-side metadata produced while settling provider persistence actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeAgentProviderPersistenceOutcome {
+    /// Deny-only duplicate delivery marker: never consumes the original owner.
+    pub(crate) duplicate_delivery: bool,
     /// Running turn that owned the validated persistence work.
     pub turn: AgentTurnRecord,
     /// Exact persistence settlement generation for rejecting late worker results.

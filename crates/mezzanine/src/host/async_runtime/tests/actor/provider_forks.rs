@@ -666,11 +666,14 @@ async fn async_actor_interruption_bookkeeping_survives_locked_replacement() {
 /// Captured metadata must be qualified before any SQLite action, not after an
 /// earlier mutation. Faults are injected into actor-produced Work, not claimed
 /// to be accepted wire input. The normal control adopts the real outcome once
-/// and rejects its duplicate without replaying either write.
+/// and rejects its duplicate without replaying either write. A cloned Work must
+/// also be inert, including when its result arrives before the original result.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_persistence_validates_complete_action_frame_before_writes() {
     for fault in [
         "none",
+        "duplicate_work",
+        "concurrent_work",
         "missing",
         "payload",
         "duplicate_result",
@@ -822,14 +825,71 @@ async fn async_actor_persistence_validates_complete_action_frame_before_writes()
                     .id
                     .clear(),
                 "missing_batch" => work.execution.response.action_batch = None,
-                "none" => {}
+                "none" | "duplicate_work" | "concurrent_work" => {}
                 _ => unreachable!(),
             }
-            let outcome = tokio::task::spawn_blocking(move || {
-                crate::runtime::execute_agent_provider_persistence_work(*work)
-            })
-            .await
-            .unwrap();
+            let repeated_work = work.clone();
+            let transport_duplicate = work.clone();
+            let (outcome, duplicate) = if fault == "concurrent_work" {
+                // Both original physical workers reach the same issuance cut.
+                // Retain and join BOTH handles before inspecting either result.
+                let barrier = StdArc::new(std::sync::Barrier::new(2));
+                let other_barrier = barrier.clone();
+                let first = tokio::task::spawn_blocking(move || {
+                    barrier.wait();
+                    crate::runtime::execute_agent_provider_persistence_work(*work)
+                });
+                let second = tokio::task::spawn_blocking(move || {
+                    other_barrier.wait();
+                    crate::runtime::execute_agent_provider_persistence_work(*repeated_work)
+                });
+                let (first, second) = tokio::join!(first, second);
+                let first = first.unwrap().unwrap();
+                let second = second.unwrap().unwrap();
+                assert_ne!(first.duplicate_delivery, second.duplicate_delivery);
+                if first.duplicate_delivery {
+                    (Ok(second), first)
+                } else {
+                    (Ok(first), second)
+                }
+            } else {
+                let outcome = tokio::task::spawn_blocking(move || {
+                    crate::runtime::execute_agent_provider_persistence_work(*work)
+                })
+                .await
+                .unwrap();
+                let duplicate = tokio::task::spawn_blocking(move || {
+                    crate::runtime::execute_agent_provider_persistence_work(*repeated_work)
+                })
+                .await
+                .unwrap()
+                .unwrap();
+                (outcome, duplicate)
+            };
+            assert!(duplicate.duplicate_delivery);
+            assert!(duplicate.memory_results.is_empty() && duplicate.issue_results.is_empty());
+            assert!(
+                crate::host::async_runtime::side_effects::settle_agent_provider_persistence(
+                    transport_duplicate,
+                )
+                .await
+                .unwrap()
+                .is_none(),
+                "duplicate transport must return neither settlement nor failure"
+            );
+            {
+                let mut batch = RuntimeEventBatch::new();
+                batch.push(RuntimeEvent::AgentProvider(
+                    AgentProviderEvent::PersistenceSettled {
+                        outcome: Box::new(duplicate),
+                    },
+                ));
+                assert_eq!(
+                    handle.submit_runtime_events(batch).await.unwrap().applied,
+                    0,
+                    "duplicate Work consumed the original persistence generation"
+                );
+            }
             let count = if client_root.join("issues.sqlite").exists() {
                 let connection =
                     rusqlite::Connection::open(client_root.join("issues.sqlite")).unwrap();
@@ -852,7 +912,7 @@ async fn async_actor_persistence_validates_complete_action_frame_before_writes()
             } else {
                 0
             };
-            if fault == "none" {
+            if matches!(fault, "none" | "duplicate_work" | "concurrent_work") {
                 let outcome = outcome.unwrap();
                 assert_eq!(outcome.issue_results.len(), 2);
                 assert_eq!(outcome.memory_results.len(), 1);

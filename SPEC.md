@@ -16630,6 +16630,15 @@ retired turn identities MUST NOT retain wake debt. This per-turn scheduling port
 does not establish immutable root membership, fresh policy authority, effect
 admission, or policy-driven release, and MUST NOT activate production budgets.
 
+Deliveries cloned from one captured provider-persistence phase MUST share a
+permanent single-use issuance identity. Only one delivery MAY execute its
+captured reads or writes. Duplicate deliveries MUST emit neither settlement nor
+failure for the original generation, and direct duplicate-outcome adoption MUST
+leave the original generation and deadline untouched. Failure MUST NOT reset
+issuance or authorize replay. This delivery fence alone does not establish
+per-action budget authority, retained partial-result custody, or physical worker
+retirement after observation is dropped.
+
 The staged root activity observer MAY capture an already activated native binding
 and perform one coalesced read per namespace/root off actor. Adoption MUST match
 the original membership allocation, repository and query lifetime; a stale read

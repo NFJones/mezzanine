@@ -396,6 +396,13 @@ result. This structural preflight is not argument validation, a transaction
 covering all actions, budget admission, or permission to replay issued work;
 other post-issue errors still require original result custody.
 
+Cloned deliveries of one captured persistence phase share a permanent single-use
+issuance identity. A duplicate performs no reads or writes and emits neither
+success nor failure for the original generation; direct duplicate-result adoption
+is also inert. Failure does not reset issuance or authorize replay. This delivery
+fence does not retain partial results, qualify budget admission, or prove physical
+worker retirement after a caller drops observation.
+
 These internal allocation and accounting ports do **not** yet enable operational
 session budgets. The provider waiting, accounting and retirement paths above must
 still be assembled with root-wide activity inhibition and persistent policy/UI

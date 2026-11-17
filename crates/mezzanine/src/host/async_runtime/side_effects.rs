@@ -1684,13 +1684,18 @@ where
                     let generation = work.generation;
                     let provider_id = work.provider_id.clone();
                     match settle_agent_provider_persistence(work).await {
-                        Ok(outcome) => {
+                        Ok(Some(outcome)) => {
                             report.completed = report.completed.saturating_add(1);
                             batch.push(RuntimeEvent::AgentProvider(
                                 super::AgentProviderEvent::PersistenceSettled {
                                     outcome: Box::new(outcome),
                                 },
                             ));
+                        }
+                        // Consume only this delivery, without a success or
+                        // failure event for the genuine phase/deadline owner.
+                        Ok(None) => {
+                            report.completed = report.completed.saturating_add(1);
                         }
                         Err(error) => {
                             report.failed = report.failed.saturating_add(1);
@@ -2299,17 +2304,19 @@ async fn persist_external_source_retirement(
         .map_err(|_| MezError::invalid_state("external source retirement worker join failed"))?
 }
 
-/// Settles actor-validated provider memory and issue work on Tokio's blocking pool.
-async fn settle_agent_provider_persistence(
+/// Settles actor-validated work on the blocking pool. Duplicate delivery returns
+/// no settlement, not an error that could consume the genuine phase owner.
+pub(super) async fn settle_agent_provider_persistence(
     work: Box<crate::runtime::RuntimeAgentProviderPersistenceWork>,
-) -> Result<crate::runtime::RuntimeAgentProviderPersistenceOutcome> {
-    tokio::task::spawn_blocking(move || {
+) -> Result<Option<crate::runtime::RuntimeAgentProviderPersistenceOutcome>> {
+    let outcome = tokio::task::spawn_blocking(move || {
         crate::runtime::execute_agent_provider_persistence_work(*work)
     })
     .await
     .map_err(|error| {
         MezError::invalid_state(format!("provider persistence worker join failed: {error}"))
-    })?
+    })??;
+    Ok((!outcome.duplicate_delivery).then_some(outcome))
 }
 
 /// Atomically replaces one persistence target with a sibling temp-file rename.

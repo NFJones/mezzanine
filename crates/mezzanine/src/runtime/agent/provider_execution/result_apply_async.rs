@@ -331,6 +331,7 @@ impl RuntimeSessionService {
                 .map(|root| super::super::issues::issue_action_project(self, turn, root))
                 .unwrap_or_default();
             let work = RuntimeAgentProviderPersistenceWork {
+                issuance: Default::default(),
                 turn: turn.clone(),
                 generation: self.mark_agent_provider_persistence_pending(turn_id),
                 model_profile: model_profile.clone(),
@@ -397,6 +398,7 @@ impl RuntimeSessionService {
         bookkeeping_read: Option<crate::runtime::RuntimeBookkeepingTranscriptReadWork>,
     ) {
         let work = RuntimeAgentProviderPersistenceWork {
+            issuance: Default::default(),
             turn: turn.clone(),
             generation: self.mark_agent_provider_persistence_pending(&turn.turn_id),
             model_profile: model_profile.clone(),
@@ -428,6 +430,7 @@ impl RuntimeSessionService {
         outcome: RuntimeAgentProviderPersistenceOutcome,
     ) -> Result<AgentTurnExecution> {
         let RuntimeAgentProviderPersistenceOutcome {
+            duplicate_delivery: _,
             turn,
             generation: _,
             model_profile,

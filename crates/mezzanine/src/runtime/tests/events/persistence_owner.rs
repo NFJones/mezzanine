@@ -271,6 +271,7 @@ fn empty_persistence_outcome(
     generation: u64,
 ) -> crate::runtime::RuntimeAgentProviderPersistenceOutcome {
     crate::runtime::RuntimeAgentProviderPersistenceOutcome {
+        duplicate_delivery: false,
         turn: turn.clone(),
         generation,
         model_profile: runtime_model_profile("runtime-batch", "test"),

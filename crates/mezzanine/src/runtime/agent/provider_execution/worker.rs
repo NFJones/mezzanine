@@ -253,6 +253,11 @@ impl RuntimeSessionService {
         &mut self,
         outcome: crate::runtime::RuntimeAgentProviderPersistenceOutcome,
     ) -> Result<crate::runtime::RuntimeTransition> {
+        // Even a directly submitted duplicate must not clear the genuine
+        // generation, cancel its deadline, or adopt an empty substitute result.
+        if outcome.duplicate_delivery {
+            return Ok(crate::runtime::RuntimeTransition::default());
+        }
         let turn_id = outcome.turn.turn_id.clone();
         let Some(turn) = self.accept_provider_persistence_owner(
             &turn_id,

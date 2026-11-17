@@ -20,6 +20,7 @@ pub(crate) fn execute_agent_provider_persistence_work(
     work: RuntimeAgentProviderPersistenceWork,
 ) -> Result<RuntimeAgentProviderPersistenceOutcome> {
     let RuntimeAgentProviderPersistenceWork {
+        issuance,
         turn,
         generation,
         model_profile,
@@ -38,11 +39,34 @@ pub(crate) fn execute_agent_provider_persistence_work(
         actions_executed_before_persistence,
         settled_action_results_before_persistence,
     } = work;
+    // Duplicate delivery is not failure of the genuine worker. Do not validate,
+    // read, write, or emit an error that could consume its still-live generation.
+    if !issuance.claim() {
+        return Ok(RuntimeAgentProviderPersistenceOutcome {
+            duplicate_delivery: true,
+            turn,
+            generation,
+            model_profile,
+            provider_id,
+            execution,
+            fork_read: None,
+            fork_snapshot: None,
+            bookkeeping_read: None,
+            bookkeeping_history: None,
+            memory_results: Vec::new(),
+            issue_results: Vec::new(),
+            issue_query_freshness,
+            issue_records_changed: false,
+            actions_executed_before_persistence,
+            settled_action_results_before_persistence,
+        });
+    }
     if let Some(read) = fork_read {
         #[cfg(test)]
         read.signal_worker_started();
         let snapshot = read.execute().map_err(|error| error.message().to_string());
         return Ok(RuntimeAgentProviderPersistenceOutcome {
+            duplicate_delivery: false,
             turn,
             generation,
             model_profile,
@@ -64,6 +88,7 @@ pub(crate) fn execute_agent_provider_persistence_work(
         let history = read.execute()?;
         let sequence = read.next_sequence()?;
         return Ok(RuntimeAgentProviderPersistenceOutcome {
+            duplicate_delivery: false,
             turn,
             generation,
             model_profile,
@@ -88,6 +113,7 @@ pub(crate) fn execute_agent_provider_persistence_work(
             ));
         }
         return Ok(RuntimeAgentProviderPersistenceOutcome {
+            duplicate_delivery: false,
             turn,
             generation,
             model_profile,
@@ -216,6 +242,7 @@ pub(crate) fn execute_agent_provider_persistence_work(
     }
 
     Ok(RuntimeAgentProviderPersistenceOutcome {
+        duplicate_delivery: false,
         turn,
         generation,
         model_profile,
