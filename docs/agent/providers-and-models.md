@@ -374,6 +374,13 @@ transfer. A dropped never-transferred claim withdraws only its original reservat
 External claims also retain the original approval allocation and MCP schema
 generation. Native budget authorization precedes hooks or transport leasing;
 current schema checks still run at transfer. Superseded approvals cannot inherit a claim.
+Filesystem admission likewise binds the original queued work and enrolled producer
+under writer ordering. That producer retains and joins its actual budget reader
+even when a caller drops observation or a reply. A numeric refusal leaves the
+patch pending without renewing its finite deadline; it is not a terminal failure.
+The claim covers initial whole-patch issuance. Fresh filesystem scopes, hooks and
+endpoint commit leases remain mandatory, while later numeric exhaustion cannot
+cancel already-issued patch effects or bypass their receipts/archive settlement.
 Other families' atomic fencing, all inline boundaries, drain proof and qualified
 automatic release remain unfinished.
 

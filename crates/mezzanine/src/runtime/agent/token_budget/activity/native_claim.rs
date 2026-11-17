@@ -1,4 +1,4 @@
-//! Exact shell and approved-external budget claims inside the existing accounting
+//! Exact shell, approved-external and filesystem budget claims in the accounting
 //! writer transaction. The existing offer owns its atomic cell; the original
 //! query owns the only reservation guard. There is no second execution queue,
 //! inference registration, durable effect replay or lock over actor handoff.
@@ -21,7 +21,7 @@ impl PartialEq for RuntimeBudgetEffectClaim {
 impl Eq for RuntimeBudgetEffectClaim {}
 
 impl RuntimeBudgetEffectClaim {
-    fn new() -> Self {
+    pub(in crate::runtime::agent) fn new() -> Self {
         Self(Arc::new(AtomicU8::new(0)))
     }
 
@@ -76,6 +76,15 @@ pub(crate) enum RuntimeBudgetNativeClaimPreparation {
     Work(Box<RuntimeBudgetNativeClaimWork>),
 }
 
+/// Disabled assembly performs the unchanged synchronous producer claim in the
+/// first actor request. Enabled assembly transfers only sealed writer work.
+#[derive(Debug)]
+pub(crate) enum RuntimeBudgetFilesystemClaimPreparation {
+    Complete(bool),
+    Refused,
+    Work(Box<RuntimeBudgetNativeClaimWork>),
+}
+
 #[derive(Debug)]
 pub(crate) struct RuntimeBudgetNativeClaimWork {
     work: Box<RuntimeBudgetActivityWork>,
@@ -107,6 +116,11 @@ enum ClaimSource {
     External {
         offer: Weak<()>,
     },
+    Filesystem {
+        attempt: crate::runtime::agent::native_filesystem::NativeFilesystemAttempt,
+        offer: Weak<crate::runtime::agent::native_filesystem::NativeFilesystemWork>,
+        cancellation: crate::runtime::processes::native_cancellation::NativeActionCancellation,
+    },
 }
 
 impl ClaimSource {
@@ -114,6 +128,11 @@ impl ClaimSource {
         match self {
             Self::Shell { cancellation, .. } => !cancellation.flag().load(Ordering::SeqCst),
             Self::External { offer } => offer.strong_count() > 0,
+            Self::Filesystem {
+                offer,
+                cancellation,
+                ..
+            } => offer.strong_count() > 0 && !cancellation.flag().load(Ordering::SeqCst),
         }
     }
 }
@@ -185,6 +204,97 @@ impl RuntimeBudgetNativeClaimWork {
 }
 
 impl RuntimeSessionService {
+    /// Registers original producer custody before preparing a budget claim.
+    /// Refusal is unissued/pending, not a terminal patch result or permission.
+    pub(crate) fn prepare_budget_filesystem_claim(
+        &mut self,
+        producer: &crate::runtime::native_filesystem::NativeFilesystemProducer,
+    ) -> Result<RuntimeBudgetFilesystemClaimPreparation> {
+        if !self.agent.budget_memberships.enabled {
+            return self
+                .claim_native_filesystem_producer(producer)
+                .map(RuntimeBudgetFilesystemClaimPreparation::Complete);
+        }
+        if producer.is_closed()? {
+            return Ok(RuntimeBudgetFilesystemClaimPreparation::Refused);
+        }
+        let Some(source) = self.prepare_budget_filesystem_source(producer)? else {
+            return Ok(RuntimeBudgetFilesystemClaimPreparation::Refused);
+        };
+        let Some(reservation) = source.budget_claim.reserve() else {
+            return Ok(RuntimeBudgetFilesystemClaimPreparation::Refused);
+        };
+        let turn = source.owner.turn.turn_id.clone();
+        Ok(match self.prepare_budget_activity_claim(&turn) {
+            RuntimeBudgetActivityPreparation::Read(work) => {
+                RuntimeBudgetFilesystemClaimPreparation::Work(Box::new(
+                    RuntimeBudgetNativeClaimWork {
+                        work,
+                        reservation,
+                        action: source.owner.action.id.clone(),
+                        source: ClaimSource::Filesystem {
+                            attempt: producer.attempt().non_owning(),
+                            offer: Arc::downgrade(&source),
+                            cancellation: producer.attempt().cancellation(),
+                        },
+                        #[cfg(test)]
+                        writer_gate: None,
+                    },
+                ))
+            }
+            _ => RuntimeBudgetFilesystemClaimPreparation::Refused,
+        })
+    }
+
+    /// Transfers the exact prior writer claim into the already retained original
+    /// producer. Scope, hook, completion and endpoint leases remain mandatory.
+    pub(crate) fn finish_budget_filesystem_claim(
+        &mut self,
+        producer: &crate::runtime::native_filesystem::NativeFilesystemProducer,
+        claim: RuntimeBudgetNativeClaim,
+    ) -> Result<bool> {
+        let RuntimeBudgetNativeClaim {
+            read,
+            mut reservation,
+            action: _,
+            source,
+        } = claim;
+        let ClaimSource::Filesystem { attempt, offer, .. } = source else {
+            return Ok(false);
+        };
+        if producer.attempt() != &attempt
+            || !self
+                .retained_native_filesystem_producer(&attempt)
+                .is_some_and(|original| original.same(producer))
+        {
+            return Ok(false);
+        }
+        let turn = read.work.turn.turn_id.clone();
+        let transaction_ok = read.observed.is_ok();
+        if !self.apply_budget_activity_read(*read)
+            || !transaction_ok
+            || self.budget_activity_operationally_inhibits_turn(&turn)
+            || reservation
+                .intent
+                .0
+                .compare_exchange(2, 3, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+        {
+            return Ok(false);
+        }
+        producer.claim_with(|attempt| {
+            let dispatch = self.claim_native_filesystem_action_with_budget(
+                attempt,
+                &offer,
+                &reservation.intent,
+            )?;
+            // Closing may retain an issued dispatch yet report false. Only the
+            // actual actor issuance, not its acceptance reply, consumes authority.
+            reservation.handed_off = dispatch.is_some();
+            Ok(dispatch)
+        })
+    }
+
     pub(crate) fn prepare_budget_native_shell_claim(
         &mut self,
         turn: &str,

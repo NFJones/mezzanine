@@ -68,6 +68,14 @@ impl NativeFilesystemProducer {
         work: Arc<NativeFilesystemWork>,
         rejection: Option<MezError>,
     ) -> Result<Option<NativeFilesystemRefusal>> {
+        // Closing prevents patch issuance, but cannot abandon a still-owned
+        // budget reader. Its actual join must precede releasing source custody.
+        let Ok(budget) = self.0.budget.try_lock() else {
+            return Ok(None);
+        };
+        if budget.is_some() {
+            return Ok(None);
+        }
         let Ok(execution) = self.0.execution.try_lock() else {
             return Ok(None);
         };

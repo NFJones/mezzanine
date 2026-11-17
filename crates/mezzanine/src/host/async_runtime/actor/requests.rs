@@ -3609,7 +3609,21 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             AsyncRuntimeRequest::ClaimNativeFilesystemProducer { producer, reply } => {
-                let result = self.service.claim_native_filesystem_producer(&producer);
+                let result = self.service.prepare_budget_filesystem_claim(&producer);
+                self.settle_source_offer(super::SourceDispatch::Filesystem(
+                    crate::runtime::RuntimeNativeFilesystemOffer::new(producer.attempt().clone()),
+                ));
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::FinishBudgetFilesystemClaim {
+                producer,
+                claim,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .finish_budget_filesystem_claim(&producer, *claim);
                 self.settle_source_offer(super::SourceDispatch::Filesystem(
                     crate::runtime::RuntimeNativeFilesystemOffer::new(producer.attempt().clone()),
                 ));

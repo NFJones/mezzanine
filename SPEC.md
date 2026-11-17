@@ -16656,6 +16656,15 @@ An approved-external claim MUST retain its original approval allocation and sche
 binding, not merely turn/action text. Native authorization MUST precede configured
 MCP hooks and transport leasing; transfer MUST still revalidate the current schema.
 Replacing or removing an approval record MUST revoke any untransferred capture.
+Enabled native filesystem admission MUST use the same writer-ordered claim for
+the original queued work and exact enrolled producer allocation. The producer
+MUST retain the physical reader handle before observation and join it before
+positive unissued-source retirement; observer or reply loss MUST NOT detach it.
+Refused numeric admission remains pending, without inventing patch failure or
+renewing the original finite deadline. A genuine earlier claim authorizes initial
+whole-patch issuance, not new endpoint permission: existing fresh scope, source,
+hook and commit leases remain mandatory. Later numeric exhaustion MUST NOT cancel
+that issued patch; its original effects, receipts and archive custody still settle.
 Other families' atomic claim fencing, draining/quiescence proof, every inline
 action boundary and automatic release remain required before production activation.
 

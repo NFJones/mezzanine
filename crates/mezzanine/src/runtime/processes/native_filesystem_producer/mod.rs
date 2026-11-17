@@ -22,6 +22,7 @@ use crate::runtime::processes::native_patch::commit::{
 use crate::runtime::processes::native_patch::worker::NativePatchWorkerOutcome;
 
 mod archive;
+mod budget;
 mod execution;
 mod progress;
 mod refusal;
@@ -84,6 +85,8 @@ struct Inner {
     >,
     /// Encoded immutable fact bytes, updated only under the progress journal lock.
     progress_fact_bytes: std::sync::atomic::AtomicUsize,
+    /// Actual budget reader handle survives its caller and is joined at retirement.
+    budget: tokio::sync::Mutex<Option<budget::Worker>>,
 }
 
 impl Drop for Inner {
@@ -178,6 +181,7 @@ impl NativeFilesystemProducer {
             execution: tokio::sync::Mutex::new(Execution::Unstarted),
             progress: Mutex::new(Vec::new()),
             progress_fact_bytes: std::sync::atomic::AtomicUsize::new(0),
+            budget: tokio::sync::Mutex::new(None),
         }))
     }
 
@@ -423,6 +427,14 @@ impl NativeFilesystemProducer {
     /// blocked OS operation remains owned here; no timeout fabricates its exit.
     pub(crate) async fn retire(&self) -> Result<Option<Arc<NativePatchWorkerOutcome>>> {
         self.close()?;
+        // Borrowed observation retains the physical handle if retirement itself
+        // is cancelled. A discarded result can withdraw only an unissued claim.
+        if self.observe_budget_claim().await.is_err() {
+            // The task was positively joined and cannot issue a patch. Keep
+            // this local read-worker failure visible without aborting unrelated
+            // producers or claiming that any pending patch result settled.
+            eprintln!("mezzanine: native filesystem budget reader failed during retirement");
+        }
         loop {
             let changed = self.0.claim_changed.notified();
             tokio::pin!(changed);

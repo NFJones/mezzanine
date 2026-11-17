@@ -15,7 +15,8 @@ use std::sync::{Arc, Weak};
 
 mod native_claim;
 pub(crate) use native_claim::{
-    RuntimeBudgetEffectClaim, RuntimeBudgetNativeClaim, RuntimeBudgetNativeClaimPreparation,
+    RuntimeBudgetEffectClaim, RuntimeBudgetFilesystemClaimPreparation, RuntimeBudgetNativeClaim,
+    RuntimeBudgetNativeClaimPreparation, RuntimeBudgetNativeClaimWork,
 };
 
 pub(super) type RootKey = (String, String);

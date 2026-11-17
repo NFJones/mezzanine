@@ -63,6 +63,17 @@ impl NativePatchCommitFence {
         })
     }
 
+    /// Shares only the original reduce-only fence for atomic claim admission.
+    pub(crate) fn cancellation(&self) -> NativeActionCancellation {
+        self.cancellation.clone()
+    }
+
+    /// Test-only reduction of the existing finite deadline; grants no authority.
+    #[cfg(test)]
+    pub(crate) fn expire_for_tests(&mut self) {
+        self.deadline = Instant::now();
+    }
+
     /// Checks bounded work between snapshot, planning and staging steps.
     /// This cannot interrupt an already-blocked filesystem operation.
     pub(crate) fn check(&self) -> Result<()> {

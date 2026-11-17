@@ -226,13 +226,99 @@ impl RuntimeSessionService {
         &mut self,
         attempt: &NativeFilesystemAttempt,
     ) -> Result<Option<RuntimeNativeFilesystemDispatch>> {
+        self.claim_native_filesystem_action_inner(attempt, None)
+    }
+
+    /// Reduces only the original test attempt's registry deadline.
+    #[cfg(test)]
+    pub(crate) fn expire_native_filesystem_deadline_for_tests(
+        &mut self,
+        attempt: &NativeFilesystemAttempt,
+    ) {
+        self.agent
+            .native_filesystem_actions
+            .expire_for_tests(attempt);
+    }
+
+    /// Captures only a genuine queued source and enrolls its original producer.
+    /// Numeric snapshots do not forbid a fresh writer-ordered reconsideration.
+    pub(in crate::runtime::agent) fn prepare_budget_filesystem_source(
+        &mut self,
+        producer: &crate::runtime::native_filesystem::NativeFilesystemProducer,
+    ) -> Result<Option<Arc<NativeFilesystemWork>>> {
+        self.ensure_completion_admission_open()?;
+        let Some(work) = self
+            .agent
+            .native_filesystem_actions
+            .queued(producer.attempt())
+        else {
+            return Ok(None);
+        };
+        if !self.native_filesystem_turn_live(&work.owner.turn)
+            || self.agent_provider_failure_is_refused(&work.owner.turn.turn_id)
+            || self.agent_turn_is_human_paused(&work.owner.turn.turn_id)
+            || self
+                .agent
+                .pending_agent_provider_persistence
+                .contains(&work.owner.turn.turn_id)
+        {
+            return Ok(None);
+        }
+        self.agent
+            .native_filesystem_actions
+            .register_producer(producer.attempt(), producer.clone())?;
+        // Budget inhibition cannot renew an expired original patch deadline or
+        // turn its cancellation into an indefinitely retryable numeric hold.
+        if let Err(error) = self
+            .agent
+            .native_filesystem_actions
+            .registered_source(producer.attempt())
+        {
+            self.agent
+                .native_filesystem_actions
+                .reject_queued(producer.attempt(), error.clone());
+            return Err(error);
+        }
+        Ok(Some(work))
+    }
+
+    pub(in crate::runtime::agent) fn claim_native_filesystem_action_with_budget(
+        &mut self,
+        attempt: &NativeFilesystemAttempt,
+        offer: &std::sync::Weak<NativeFilesystemWork>,
+        budget: &crate::runtime::RuntimeBudgetEffectClaim,
+    ) -> Result<Option<RuntimeNativeFilesystemDispatch>> {
+        let Some(work) = self.agent.native_filesystem_actions.queued(attempt) else {
+            return Ok(None);
+        };
+        if !std::sync::Weak::ptr_eq(offer, &Arc::downgrade(&work))
+            || &work.budget_claim != budget
+            || !budget.transferred()
+        {
+            return Ok(None);
+        }
+        self.claim_native_filesystem_action_inner(attempt, Some(budget))
+    }
+
+    fn claim_native_filesystem_action_inner(
+        &mut self,
+        attempt: &NativeFilesystemAttempt,
+        budget: Option<&crate::runtime::RuntimeBudgetEffectClaim>,
+    ) -> Result<Option<RuntimeNativeFilesystemDispatch>> {
         self.ensure_completion_admission_open()?;
         let Some(work) = self.agent.native_filesystem_actions.queued(attempt) else {
             return Ok(None);
         };
+        if self.runtime_budget_assembly_enabled() && budget.is_none() {
+            return Ok(None);
+        }
         if self.agent_provider_failure_is_refused(&work.owner.turn.turn_id)
             || self.agent_turn_is_human_paused(&work.owner.turn.turn_id)
-            || self.budget_activity_inhibits_turn(&work.owner.turn.turn_id)
+            || if budget.is_some() {
+                self.budget_activity_operationally_inhibits_turn(&work.owner.turn.turn_id)
+            } else {
+                self.budget_activity_inhibits_turn(&work.owner.turn.turn_id)
+            }
             || self
                 .agent
                 .pending_agent_provider_persistence

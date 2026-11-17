@@ -136,6 +136,7 @@ fn selected_with_setup(
         turn,
         action,
         execution,
+        retain_root: false,
     }
 }
 

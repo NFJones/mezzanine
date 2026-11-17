@@ -1414,8 +1414,54 @@ impl AsyncRuntimeSessionHandle {
         &self,
         producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
     ) -> Result<bool> {
-        self.request(|reply| AsyncRuntimeRequest::ClaimNativeFilesystemProducer { producer, reply })
-            .await?
+        if !producer.has_budget_claim().await {
+            let preparation = self
+                .request(|reply| AsyncRuntimeRequest::ClaimNativeFilesystemProducer {
+                    producer: producer.clone(),
+                    reply,
+                })
+                .await??;
+            match preparation {
+                crate::runtime::RuntimeBudgetFilesystemClaimPreparation::Complete(accepted) => {
+                    return Ok(accepted);
+                }
+                crate::runtime::RuntimeBudgetFilesystemClaimPreparation::Refused => {
+                    return Ok(false);
+                }
+                crate::runtime::RuntimeBudgetFilesystemClaimPreparation::Work(work) => {
+                    if !producer.start_budget_claim(work).await? {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        match producer.observe_budget_claim().await {
+            Ok(Some(claim)) => self.finish_budget_filesystem_claim(producer, claim).await,
+            Ok(None) => Ok(false),
+            Err(failure) => {
+                self.request(|reply| AsyncRuntimeRequest::FailBudgetActivityRead {
+                    failure,
+                    reply,
+                })
+                .await?;
+                Ok(false)
+            }
+        }
+    }
+
+    /// Transfers only an already sealed writer claim to its exact enrolled
+    /// producer; the actor installs dispatch before returning acceptance.
+    pub(crate) async fn finish_budget_filesystem_claim(
+        &self,
+        producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
+        claim: Box<crate::runtime::RuntimeBudgetNativeClaim>,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::FinishBudgetFilesystemClaim {
+            producer,
+            claim,
+            reply,
+        })
+        .await?
     }
 
     /// Captures only actual original queued refusal, never worker/join evidence.

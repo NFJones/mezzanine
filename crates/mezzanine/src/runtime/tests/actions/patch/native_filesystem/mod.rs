@@ -26,6 +26,9 @@ struct Fixture {
     execution: mez_agent::AgentTurnExecution,
     /// Unique private fixture subtree.
     root: PathBuf,
+    /// Budget tests retain the subtree on unwind until explicit reader/actor
+    /// retirement and binding-lease release have been positively observed.
+    retain_root: bool,
 }
 
 impl Fixture {
@@ -212,6 +215,7 @@ impl Fixture {
             action,
             execution,
             root,
+            retain_root: false,
         }
     }
 
@@ -258,6 +262,13 @@ impl Drop for Fixture {
     /// Stops only the fixture root and removes its unique owned subtree.
     fn drop(&mut self) {
         let _ = self.service.terminate_all_pane_processes();
+        if self.retain_root {
+            eprintln!(
+                "native budget filesystem fixture retained pending verified cleanup: {}",
+                self.root.display()
+            );
+            return;
+        }
         let _ = fs::remove_dir_all(&self.root);
     }
 }
@@ -790,6 +801,9 @@ fn native_filesystem_actor_commit_lease_rejects_fresh_authority_contraction() {
 }
 
 mod async_producer;
+
+#[cfg(target_os = "linux")]
+mod budget;
 
 #[cfg(target_os = "linux")]
 mod canonical;

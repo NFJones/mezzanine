@@ -1250,6 +1250,12 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Shared registration retained before this claim can be polled.
         producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
         /// Acceptance only; sole dispatch custody never crosses this reply.
+        reply: oneshot::Sender<Result<crate::runtime::RuntimeBudgetFilesystemClaimPreparation>>,
+    },
+    /// Transfers a sealed writer claim into the original retained producer.
+    FinishBudgetFilesystemClaim {
+        producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
+        claim: Box<crate::runtime::RuntimeBudgetNativeClaim>,
         reply: oneshot::Sender<Result<bool>>,
     },
     /// Captures positive original no-dispatch provenance without issuing work.
@@ -1905,6 +1911,7 @@ impl AsyncRuntimeRequest {
             | Self::ClaimNativeShellAction { .. }
             | Self::RecoverNativeFilesystemProducers { .. }
             | Self::ClaimNativeFilesystemProducer { .. }
+            | Self::FinishBudgetFilesystemClaim { .. }
             | Self::RefuseNativeFilesystemProducer { .. }
             | Self::TransferRefusedNativeFilesystemProducer { .. }
             | Self::TransferNativeFilesystemProducer { .. }

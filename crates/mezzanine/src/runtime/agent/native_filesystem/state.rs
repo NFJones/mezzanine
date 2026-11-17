@@ -139,6 +139,11 @@ impl NativeFilesystemAttempt {
         Ok(())
     }
 
+    /// Original reduce-only fence; cloning it grants no filesystem authority.
+    pub(in crate::runtime::agent) fn cancellation(&self) -> NativeActionCancellation {
+        self.fence.cancellation()
+    }
+
     /// Monotonically fences the original queued or issued work, granting no rights.
     pub(crate) fn cancel(&self) {
         self.fence.cancel();
@@ -178,6 +183,8 @@ pub(crate) struct NativeFilesystemOwner {
 pub(crate) struct NativeFilesystemWork {
     /// Exact original canonical slot and permission evidence.
     pub(crate) owner: NativeFilesystemOwner,
+    /// Exact offer cell, not a second queue or endpoint commit capability.
+    pub(in crate::runtime::agent) budget_claim: crate::runtime::RuntimeBudgetEffectClaim,
     /// Exact transaction generation and semantic operation.
     pub(crate) identity: NativeCommitIdentity,
     /// Queued source data; not a write or worker-admission capability.
@@ -373,6 +380,7 @@ impl NativeFilesystemActions {
             owner,
             identity,
             source,
+            budget_claim: crate::runtime::RuntimeBudgetEffectClaim::new(),
         });
         self.attempts.insert(
             self.next,
@@ -498,6 +506,11 @@ impl NativeFilesystemActions {
             entry.failure = Some(Box::new(error));
             entry.phase = Phase::Rejected;
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn expire_for_tests(&mut self, token: &NativeFilesystemAttempt) {
+        self.get_mut(token).unwrap().fence.expire_for_tests();
     }
 
     /// Issues work once after validation; a repeated claim never starts work again.
