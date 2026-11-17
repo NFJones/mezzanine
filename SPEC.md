@@ -16635,6 +16635,10 @@ and perform one coalesced read per namespace/root off actor. Adoption MUST match
 the original membership allocation, repository and query lifetime; a stale read
 MUST NOT project into a replacement conversation. Pending, unavailable and numeric
 exhaustion MUST remain distinct facts, and failed reads MUST NOT invent zero usage.
+At its fixed actor metadata bound, the observer MAY reclaim only roots unreferenced
+by retained membership or inherited sources and without a live original query.
+This MUST NOT retire an effect owner or remove durable usage/replay evidence;
+remaining live-root/query pressure MUST continue to refuse locally.
 Observed root inhibition MUST fence ready selection, provider readiness and queued
 native-shell, filesystem and approved-external claims without cancelling original
 issued outcomes. Native-shell and approved-external handle claims MUST first

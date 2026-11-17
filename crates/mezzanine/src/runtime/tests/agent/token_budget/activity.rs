@@ -6,7 +6,7 @@ use crate::storage::token_usage::budget::operations::BudgetPolicyOperation;
 use crate::storage::token_usage::budget::policy_projection::{
     BudgetConfigPolicy, BudgetPolicyPublication,
 };
-use mez_agent::token_budget::{BudgetLimits, BudgetOverride, BudgetReceiptId};
+use mez_agent::token_budget::{BudgetLimits, BudgetOverride, BudgetReceiptId, TokenLimit};
 
 async fn prepare(scene: &mut Scene, turn: &AgentTurnRecord) {
     let work = scene
@@ -194,6 +194,12 @@ async fn runtime_budget_activity_same_root_descendant_and_independent_claims() {
             .unwrap()
             .is_none()
     );
+    // Detached projection metadata must not become a lifetime-root cap. The
+    // parent/child inhibition remains live while independent B is captured.
+    drop(scene.service.fill_budget_activity_metadata_for_tests(false));
+    observe(&mut scene, &independent).await;
+    assert_eq!(scene.service.budget_activity_metadata_count_for_tests(), 2);
+    assert!(scene.service.budget_activity_inhibits_turn(&child.turn_id));
     let independent_dispatch = scene
         .service
         .claim_configured_agent_provider_task(
@@ -338,4 +344,92 @@ async fn runtime_budget_activity_rebind_refuses_original_read_without_new_root_w
             .service
             .budget_activity_inhibits_turn(&replacement.turn_id)
     );
+}
+
+/// Reclamation cannot drop a live original query merely because actual human
+/// departure and membership pressure removed its old actor capture. This holds
+/// unexecuted Work, not a claim of physical-reader retirement or effect custody.
+#[tokio::test]
+async fn runtime_budget_activity_pressure_retains_original_query_until_drop() {
+    let mut scene = Scene::new();
+    let primary = scene
+        .service
+        .attach_primary("primary", true, Size::new(120, 30).unwrap(), 120)
+        .unwrap();
+    let original = scene.start();
+    prepare(&mut scene, &original).await;
+    policy(&scene, BudgetLimits::default()).await;
+    let work = scene
+        .service
+        .prepare_budget_activity_read(&original.turn_id)
+        .unwrap()
+        .unwrap();
+    scene.service.stop_agent_turn_for_pane("%1").unwrap();
+    scene
+        .service
+        .fill_runtime_budget_captures_for_tests(&original.conversation_id, false);
+    scene
+        .service
+        .execute_agent_shell_command(&primary, "/new")
+        .unwrap();
+    let next = scene.start();
+    prepare(&mut scene, &next).await;
+    assert_eq!(scene.service.runtime_budget_capture_count_for_tests(), 1);
+    drop(scene.service.fill_budget_activity_metadata_for_tests(false));
+    observe(&mut scene, &next).await;
+    assert_eq!(scene.service.budget_activity_metadata_count_for_tests(), 2);
+    // The old result cannot adopt through the removed original capture.
+    let read = tokio::task::spawn_blocking(move || work.execute())
+        .await
+        .unwrap();
+    assert!(!scene.service.apply_budget_activity_read(*read));
+    scene.service.stop_agent_turn_for_pane("%1").unwrap();
+    scene
+        .service
+        .execute_agent_shell_command(&primary, "/new")
+        .unwrap();
+    let third = scene.start();
+    prepare(&mut scene, &third).await;
+    drop(scene.service.fill_budget_activity_metadata_for_tests(false));
+    observe(&mut scene, &third).await;
+    // The released original is gone; the two retained membership roots remain.
+    assert_eq!(scene.service.budget_activity_metadata_count_for_tests(), 2);
+    scene.service.stop_agent_turn_for_pane("%1").unwrap();
+}
+
+/// Synthetic live-query tokens exercise the fixed metadata bound, not physical
+/// reader retirement. The actual current claim owner must refuse locally, then
+/// recover only observation capacity; an exhausted numeric policy still holds.
+#[tokio::test]
+async fn runtime_budget_activity_pressure_refuses_live_queries_then_recovers() {
+    let mut scene = Scene::new();
+    let turn = scene.start();
+    prepare(&mut scene, &turn).await;
+    policy(
+        &scene,
+        BudgetLimits {
+            input: TokenLimit::limited(0).unwrap(),
+            output: TokenLimit::Unlimited,
+        },
+    )
+    .await;
+    let tokens = scene.service.fill_budget_activity_metadata_for_tests(true);
+    assert_eq!(
+        scene.service.budget_activity_metadata_count_for_tests(),
+        4096
+    );
+    assert!(matches!(
+        scene.service.prepare_budget_activity_claim(&turn.turn_id),
+        crate::runtime::RuntimeBudgetActivityPreparation::Refused
+    ));
+    assert!(scene.service.budget_activity_inhibits_turn(&turn.turn_id));
+    assert_eq!(
+        scene.service.budget_activity_metadata_count_for_tests(),
+        4096
+    );
+    drop(tokens);
+    observe(&mut scene, &turn).await;
+    assert_eq!(scene.service.budget_activity_metadata_count_for_tests(), 1);
+    assert!(scene.service.budget_activity_inhibits_turn(&turn.turn_id));
+    scene.service.stop_agent_turn_for_pane("%1").unwrap();
 }

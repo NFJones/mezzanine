@@ -359,6 +359,10 @@ an effect permit, or automatic budget-driven resumption.
 The staged activity observer additionally qualifies an existing native binding and
 coalesces one off-actor policy/expense read per accounting namespace/root. Its
 observed hold follows captured descendant membership, not pane or depth labels.
+At the fixed actor metadata bound, only roots no longer referenced by a retained
+membership or inherited source and without a live original query are reclaimed.
+This releases descriptive capacity, never durable usage, an effect owner, or a
+retirement obligation; live-root and pending-query pressure still refuses safely.
 Pending/unavailable reads inhibit without fabricating numeric exhaustion; stale
 outcomes cannot update a replacement conversation. Native-shell and approved
 external handle claims reobserve before their normal actor claim, while known

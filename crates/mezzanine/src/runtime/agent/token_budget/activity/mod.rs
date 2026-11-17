@@ -128,6 +128,38 @@ impl RuntimeBudgetActivityWork {
 }
 
 impl RuntimeSessionService {
+    /// Synthetic projection pressure only, never accounts, bindings or grants.
+    /// Optional query tokens test metadata liveness, not physical reader custody.
+    #[cfg(test)]
+    pub(crate) fn fill_budget_activity_metadata_for_tests(&mut self, pinned: bool) -> Vec<Arc<()>> {
+        let activity = &mut self.agent.budget_memberships.activity;
+        let mut index = 0usize;
+        let mut tokens = Vec::new();
+        while activity.len() < super::RUNTIME_BUDGET_MEMBERSHIP_LIMIT {
+            let token = pinned.then(|| Arc::new(()));
+            activity.insert(
+                (
+                    "synthetic-detached-namespace".into(),
+                    format!("root-{index}"),
+                ),
+                RootActivity {
+                    pending: token.as_ref().map(Arc::downgrade),
+                    ..RootActivity::default()
+                },
+            );
+            if let Some(token) = token {
+                tokens.push(token);
+            }
+            index += 1;
+        }
+        tokens
+    }
+
+    #[cfg(test)]
+    pub(crate) fn budget_activity_metadata_count_for_tests(&self) -> usize {
+        self.agent.budget_memberships.activity.len()
+    }
+
     #[cfg(test)]
     pub(crate) fn inject_budget_activity_fault(&mut self, turn: String, panic_reader: bool) {
         self.agent.budget_memberships.activity_fault = Some((turn, panic_reader));
@@ -254,6 +286,12 @@ impl RuntimeSessionService {
             && self.agent.budget_memberships.activity.len()
                 >= super::RUNTIME_BUDGET_MEMBERSHIP_LIMIT
         {
+            self.reclaim_detached_budget_activity();
+        }
+        if !self.agent.budget_memberships.activity.contains_key(&root)
+            && self.agent.budget_memberships.activity.len()
+                >= super::RUNTIME_BUDGET_MEMBERSHIP_LIMIT
+        {
             return Err(MezError::invalid_state(
                 "budget activity capture capacity unavailable",
             ));
@@ -360,6 +398,31 @@ impl RuntimeSessionService {
                 .set_budget_exhausted(&turn, exhausted);
         }
         true
+    }
+
+    /// Only descriptive actor metadata is reclaimed, and only under pressure.
+    /// Membership/preparation custody and durable accounts remain untouched.
+    /// A still-owned query pins its projection even after membership departure;
+    /// neither this sweep nor query completion attests effect retirement.
+    fn reclaim_detached_budget_activity(&mut self) {
+        let budgets = &mut self.agent.budget_memberships;
+        let roots = budgets
+            .entries
+            .values()
+            .filter_map(|entry| {
+                entry
+                    .member
+                    .as_ref()
+                    .map(key)
+                    .or_else(|| match &entry.source {
+                        super::Source::Inherited { parent, .. } => Some(key(parent)),
+                        _ => None,
+                    })
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        budgets.activity.retain(|root, state| {
+            roots.contains(root) || state.pending.as_ref().and_then(Weak::upgrade).is_some()
+        });
     }
 
     fn budget_activity_key_for_turn(&self, turn_id: &str) -> Option<RootKey> {
