@@ -1,4 +1,4 @@
-//! One exact native-shell budget claim, ordered inside the existing accounting
+//! Exact shell and approved-external budget claims inside the existing accounting
 //! writer transaction. The existing offer owns its atomic cell; the original
 //! query owns the only reservation guard. There is no second execution queue,
 //! inference registration, durable effect replay or lock over actor handoff.
@@ -7,7 +7,7 @@ use super::*;
 use crate::runtime::RuntimeNativeShellDispatch;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-/// Shared identity of ONE original native offer. States are available (0),
+/// Shared identity of ONE original effect offer. States are available (0),
 /// preparing (1), natively claimed (2), and transferred to the actor (3).
 /// A snapshot/clone cannot perform or recreate the sealed claim transition.
 #[derive(Debug, Clone)]
@@ -81,8 +81,7 @@ pub(crate) struct RuntimeBudgetNativeClaimWork {
     work: Box<RuntimeBudgetActivityWork>,
     reservation: ClaimReservation,
     action: String,
-    marker: String,
-    cancellation: crate::runtime::processes::native_cancellation::NativeActionCancellation,
+    source: ClaimSource,
     #[cfg(test)]
     writer_gate: Option<(Arc<tokio::sync::Notify>, std::sync::mpsc::Receiver<()>)>,
 }
@@ -94,7 +93,29 @@ pub(crate) struct RuntimeBudgetNativeClaim {
     read: Box<RuntimeBudgetActivityRead>,
     reservation: ClaimReservation,
     action: String,
-    marker: String,
+    source: ClaimSource,
+}
+
+/// Native budget authority binds either the exact shell marker/cancellation or
+/// the original external approval allocation, never just action identifier text.
+#[derive(Debug)]
+enum ClaimSource {
+    Shell {
+        marker: String,
+        cancellation: crate::runtime::processes::native_cancellation::NativeActionCancellation,
+    },
+    External {
+        offer: Weak<()>,
+    },
+}
+
+impl ClaimSource {
+    fn is_live(&self) -> bool {
+        match self {
+            Self::Shell { cancellation, .. } => !cancellation.flag().load(Ordering::SeqCst),
+            Self::External { offer } => offer.strong_count() > 0,
+        }
+    }
 }
 
 impl RuntimeBudgetNativeClaim {
@@ -126,8 +147,7 @@ impl RuntimeBudgetNativeClaimWork {
             work,
             reservation,
             action,
-            marker,
-            cancellation,
+            source,
             #[cfg(test)]
             writer_gate,
         } = self;
@@ -150,7 +170,7 @@ impl RuntimeBudgetNativeClaimWork {
             &work.owner.binding_owner,
             &work.owner.lease,
             || {
-                if work.identity.strong_count() > 0 && !cancellation.flag().load(Ordering::SeqCst) {
+                if work.identity.strong_count() > 0 && source.is_live() {
                     reservation.intent.claim();
                 }
             },
@@ -159,7 +179,7 @@ impl RuntimeBudgetNativeClaimWork {
             read: Box::new(RuntimeBudgetActivityRead { work, observed }),
             reservation,
             action,
-            marker,
+            source,
         })
     }
 }
@@ -197,8 +217,10 @@ impl RuntimeSessionService {
                     work,
                     reservation,
                     action: action.into(),
-                    marker,
-                    cancellation,
+                    source: ClaimSource::Shell {
+                        marker,
+                        cancellation,
+                    },
                     #[cfg(test)]
                     writer_gate: None,
                 }))
@@ -218,8 +240,11 @@ impl RuntimeSessionService {
             read,
             mut reservation,
             action,
-            marker,
+            source,
         } = claim;
+        let ClaimSource::Shell { marker, .. } = source else {
+            return Ok(None);
+        };
         let turn = read.work.turn.turn_id.clone();
         let transaction_ok = read.observed.is_ok();
         if !self.apply_budget_activity_read(*read)
@@ -237,6 +262,83 @@ impl RuntimeSessionService {
             &turn,
             &action,
             &marker,
+            &reservation.intent,
+        )?;
+        reservation.handed_off = result.is_some();
+        Ok(result)
+    }
+
+    pub(crate) fn prepare_budget_external_claim(
+        &mut self,
+        turn: &str,
+        action: &str,
+    ) -> RuntimeBudgetNativeClaimPreparation {
+        if !self.agent.budget_memberships.enabled {
+            return RuntimeBudgetNativeClaimPreparation::Disabled;
+        }
+        if !self.budget_external_candidate(turn, action) {
+            return RuntimeBudgetNativeClaimPreparation::Refused;
+        }
+        let Some(pending) = self
+            .agent
+            .pending_approved_external_actions
+            .get_mut(&(turn.into(), action.into()))
+        else {
+            return RuntimeBudgetNativeClaimPreparation::Refused;
+        };
+        let offer = Arc::downgrade(&pending.identity);
+        let Some(reservation) = pending
+            .budget_claim
+            .get_or_insert_with(RuntimeBudgetEffectClaim::new)
+            .reserve()
+        else {
+            return RuntimeBudgetNativeClaimPreparation::Refused;
+        };
+        match self.prepare_budget_activity_claim(turn) {
+            RuntimeBudgetActivityPreparation::Read(work) => {
+                RuntimeBudgetNativeClaimPreparation::Work(Box::new(RuntimeBudgetNativeClaimWork {
+                    work,
+                    reservation,
+                    action: action.into(),
+                    source: ClaimSource::External { offer },
+                    #[cfg(test)]
+                    writer_gate: None,
+                }))
+            }
+            _ => RuntimeBudgetNativeClaimPreparation::Refused,
+        }
+    }
+
+    pub(crate) fn finish_budget_external_claim(
+        &mut self,
+        claim: RuntimeBudgetNativeClaim,
+    ) -> Result<Option<crate::runtime::RuntimeApprovedExternalActionDispatch>> {
+        let RuntimeBudgetNativeClaim {
+            read,
+            mut reservation,
+            action,
+            source,
+        } = claim;
+        let ClaimSource::External { offer } = source else {
+            return Ok(None);
+        };
+        let turn = read.work.turn.turn_id.clone();
+        let transaction_ok = read.observed.is_ok();
+        if !self.apply_budget_activity_read(*read)
+            || !transaction_ok
+            || self.budget_activity_operationally_inhibits_turn(&turn)
+            || reservation
+                .intent
+                .0
+                .compare_exchange(2, 3, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+        {
+            return Ok(None);
+        }
+        let result = self.claim_approved_external_action_with_budget(
+            &turn,
+            &action,
+            &offer,
             &reservation.intent,
         )?;
         reservation.handed_off = result.is_some();

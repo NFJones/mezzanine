@@ -1219,6 +1219,7 @@ impl AsyncRuntimeSessionHandle {
     /// Reobserves coherent known expense/policy through the original binding.
     /// This read is not a permit: the actor still validates the current effect
     /// owner, and another same-root outstanding query keeps claims inhibited.
+    #[cfg(test)]
     pub(crate) async fn reconcile_budget_activity(&self, turn_id: &str) -> Result<bool> {
         let preparation = self
             .request(|reply| AsyncRuntimeRequest::PrepareBudgetActivityRead {
@@ -1268,8 +1269,26 @@ impl AsyncRuntimeSessionHandle {
         turn_id: String,
         action_id: String,
     ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
-        if !self.reconcile_budget_activity(&turn_id).await? {
-            return Ok(None);
+        match self
+            .prepare_budget_external_claim(turn_id.clone(), action_id.clone())
+            .await?
+        {
+            crate::runtime::RuntimeBudgetNativeClaimPreparation::Refused => return Ok(None),
+            crate::runtime::RuntimeBudgetNativeClaimPreparation::Work(work) => {
+                let failure = work.failure_capture();
+                return match tokio::task::spawn_blocking(move || work.execute()).await {
+                    Ok(claim) => self.finish_budget_external_claim(claim).await,
+                    Err(_) => {
+                        self.request(|reply| AsyncRuntimeRequest::FailBudgetActivityRead {
+                            failure,
+                            reply,
+                        })
+                        .await?;
+                        Ok(None)
+                    }
+                };
+            }
+            crate::runtime::RuntimeBudgetNativeClaimPreparation::Disabled => {}
         }
         self.request(|reply| AsyncRuntimeRequest::ClaimApprovedExternalAction {
             turn_id,
@@ -1277,6 +1296,27 @@ impl AsyncRuntimeSessionHandle {
             reply,
         })
         .await?
+    }
+
+    pub(crate) async fn prepare_budget_external_claim(
+        &self,
+        turn_id: String,
+        action_id: String,
+    ) -> Result<crate::runtime::RuntimeBudgetNativeClaimPreparation> {
+        self.request(|reply| AsyncRuntimeRequest::PrepareBudgetExternalClaim {
+            turn_id,
+            action_id,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn finish_budget_external_claim(
+        &self,
+        claim: Box<crate::runtime::RuntimeBudgetNativeClaim>,
+    ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
+        self.request(|reply| AsyncRuntimeRequest::FinishBudgetExternalClaim { claim, reply })
+            .await?
     }
 
     /// Claims one authorized native shell action for worker execution.

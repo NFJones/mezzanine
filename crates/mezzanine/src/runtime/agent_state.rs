@@ -48,6 +48,32 @@ pub struct RuntimeAgentProviderTask {
     pub model_profile: ModelProfile,
 }
 
+/// Original pending approval allocation, including an optional native budget
+/// claim. Replacing/removing this record revokes its weak capture, even when a
+/// later response reuses the same turn/action strings. Schema absence retains
+/// its existing unverifiable-approval meaning; it is not budget authority.
+#[derive(Debug)]
+pub(crate) struct RuntimeApprovedExternalOffer {
+    pub(crate) schema_generation: Option<String>,
+    pub(crate) identity: std::sync::Arc<()>,
+    pub(crate) budget_claim: Option<crate::runtime::RuntimeBudgetEffectClaim>,
+}
+
+impl RuntimeApprovedExternalOffer {
+    pub(crate) fn new(schema_generation: Option<String>) -> Self {
+        Self {
+            schema_generation,
+            identity: std::sync::Arc::new(()),
+            budget_claim: None,
+        }
+    }
+}
+
+/// Passive fixture witness populated only after actual original actor acceptance.
+#[cfg(test)]
+pub(crate) type RuntimeExternalAcceptedResultObserverForTests =
+    std::sync::Arc<std::sync::Mutex<Option<(String, String, mez_agent::ActionStatus)>>>;
+
 /// One approved external action transferred from the runtime actor to a worker.
 ///
 /// The actor retains turn and execution ownership. The worker receives only
@@ -64,6 +90,10 @@ pub(crate) struct RuntimeApprovedExternalActionDispatch {
     pub cancellation: crate::runtime::processes::native_cancellation::NativeActionCancellation,
     /// MCP-specific transport state when the action is an MCP call.
     pub mcp: Option<RuntimeApprovedMcpActionDispatch>,
+    /// Test-only observation after the real original result is actor-accepted.
+    /// This witness cannot inject a result or grant dispatch/retirement authority.
+    #[cfg(test)]
+    pub accepted_result_for_tests: Option<RuntimeExternalAcceptedResultObserverForTests>,
 }
 
 /// MCP transport inputs moved into one approved-action worker.

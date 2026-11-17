@@ -226,8 +226,12 @@ pub struct RuntimeSessionService {
 /// declaration makes the boundary available to the crate.
 mod agent;
 pub(crate) use agent::token_budget::activity::{
-    RuntimeBudgetActivityFailure, RuntimeBudgetActivityPreparation, RuntimeBudgetActivityRead,
-    RuntimeBudgetEffectClaim, RuntimeBudgetNativeClaim, RuntimeBudgetNativeClaimPreparation,
+    RuntimeBudgetActivityFailure, RuntimeBudgetEffectClaim, RuntimeBudgetNativeClaim,
+    RuntimeBudgetNativeClaimPreparation,
+};
+#[cfg(test)]
+pub(crate) use agent::token_budget::activity::{
+    RuntimeBudgetActivityPreparation, RuntimeBudgetActivityRead,
 };
 pub(crate) use agent::token_budget::admission_work::{
     RuntimeBudgetAdmissionWork, RuntimeBudgetHeldAttempt,

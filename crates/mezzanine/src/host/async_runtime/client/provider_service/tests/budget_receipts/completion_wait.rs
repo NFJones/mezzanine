@@ -42,6 +42,27 @@ async fn budget_completed_response_native_claim_orders_after_existing_writer() {
     Box::pin(qualify(CompletionCase::ClaimWriterContention)).await;
 }
 
+/// An approved fetch is still only an offer until its budget claim is ordered
+/// against the original accounting writer. The HTTP effect must happen once.
+#[tokio::test]
+async fn budget_completed_response_external_claim_orders_after_existing_writer() {
+    Box::pin(qualify(CompletionCase::ExternalWriterContention)).await;
+}
+
+#[tokio::test]
+async fn budget_completed_response_external_claim_boundary_and_withdrawal_are_once_only() {
+    for mode in [
+        CompletionCase::ExternalBeforeRecross,
+        CompletionCase::ExternalClaimDrop,
+        CompletionCase::ExternalCaptureDrop,
+        CompletionCase::ExternalObserverDrop,
+        CompletionCase::ExternalPause,
+        CompletionCase::ExternalStop,
+    ] {
+        Box::pin(qualify(mode)).await;
+    }
+}
+
 /// A native claim linearizes before the later policy writer, even if actor
 /// handoff follows it. Dropped untransferred claims instead release only their
 /// original reservation and leave the offer eligible for a fresh claim.
@@ -124,6 +145,13 @@ enum CompletionCase {
     Adopt,
     ClaimRecross,
     ClaimWriterContention,
+    ExternalWriterContention,
+    ExternalBeforeRecross,
+    ExternalClaimDrop,
+    ExternalCaptureDrop,
+    ExternalObserverDrop,
+    ExternalPause,
+    ExternalStop,
     NativeClaimBeforeRecross,
     NativeClaimDrop,
     NativeCaptureDrop,
@@ -148,7 +176,39 @@ async fn budget_completed_response_native_monitor_error_retires_retained_writer(
     Box::pin(qualify(CompletionCase::MonitorError)).await;
 }
 
+/// Runs the real original append/ACK owner, never fabricates a history receipt.
+async fn settle_external_fixture_bookkeeping(
+    handle: &crate::host::async_runtime::AsyncRuntimeSessionHandle,
+) -> crate::Result<()> {
+    let report = crate::host::async_runtime::run_async_persistence_side_effect_service(
+        handle,
+        crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
+            max_polls: 16,
+            drain_limit: 64,
+            idle_interval: Duration::from_millis(1),
+        },
+        |polls, _| polls >= 16,
+    )
+    .await?;
+    if report.failed != 0 {
+        return Err(MezError::invalid_state(
+            "external fixture original bookkeeping failed",
+        ));
+    }
+    Ok(())
+}
+
 async fn qualify(mode: CompletionCase) {
+    let external = matches!(
+        mode,
+        CompletionCase::ExternalWriterContention
+            | CompletionCase::ExternalBeforeRecross
+            | CompletionCase::ExternalClaimDrop
+            | CompletionCase::ExternalCaptureDrop
+            | CompletionCase::ExternalObserverDrop
+            | CompletionCase::ExternalPause
+            | CompletionCase::ExternalStop
+    );
     let stop = matches!(mode, CompletionCase::Stop | CompletionCase::StopAfterResume);
     let read_failure = mode == CompletionCase::ReadFailure;
     let adopt = matches!(
@@ -156,6 +216,13 @@ async fn qualify(mode: CompletionCase) {
         CompletionCase::Adopt
             | CompletionCase::ClaimRecross
             | CompletionCase::ClaimWriterContention
+            | CompletionCase::ExternalWriterContention
+            | CompletionCase::ExternalBeforeRecross
+            | CompletionCase::ExternalClaimDrop
+            | CompletionCase::ExternalCaptureDrop
+            | CompletionCase::ExternalObserverDrop
+            | CompletionCase::ExternalPause
+            | CompletionCase::ExternalStop
             | CompletionCase::NativeClaimBeforeRecross
             | CompletionCase::NativeClaimDrop
             | CompletionCase::NativeCaptureDrop
@@ -226,6 +293,27 @@ async fn qualify(mode: CompletionCase) {
         .clone();
     let turn = dispatch.turn.turn_id.clone();
     let agent = AgentId::opaque(dispatch.turn.agent_id.clone()).unwrap();
+    let external_count = Arc::new(AtomicUsize::new(0));
+    let accepted_external_result = Arc::new(std::sync::Mutex::new(None));
+    let external_listener = if external {
+        Some(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap())
+    } else {
+        None
+    };
+    let external_url = external_listener
+        .as_ref()
+        .map(|listener| format!("http://{}/original", listener.local_addr().unwrap()));
+    let expected_external_url = external_url.clone();
+    let fetch_count = external_count.clone();
+    let external_server = external_listener.map(|listener| tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            fetch_count.fetch_add(1, Ordering::SeqCst);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nConnection: close\r\n\r\noriginal").await.unwrap();
+        }
+    }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let provider =
         OpenAiCompatibleChatCompletionsProvider::without_auth(ReqwestProviderHttpTransport)
@@ -262,7 +350,12 @@ async fn qualify(mode: CompletionCase) {
             assert!(bytes.len() < 1024 * 1024);
         }
         count.fetch_add(1, Ordering::SeqCst);
-        let content = serde_json::json!({"rationale":"fixture", "actions":[{"type":"shell_command", "summary":"Original retained candidate", "command":command}]}).to_string();
+        let content = if let Some(url) = external_url {
+            serde_json::json!({"rationale":"fixture", "actions":[{"type":"fetch_url", "url":url}]})
+                .to_string()
+        } else {
+            serde_json::json!({"rationale":"fixture", "actions":[{"type":"shell_command", "summary":"Original retained candidate", "command":command}]}).to_string()
+        };
         let body = serde_json::json!({"id":"original-completion", "choices":[{"index":0,"message":{"role":"assistant","content":content},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}).to_string();
         socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
         // Observe any unexpected retry instead of disappearing after reply one.
@@ -439,7 +532,11 @@ async fn qualify(mode: CompletionCase) {
                         return Err("original crossing/release observation was not delivered".to_owned());
                     }
                     matches!(completion.as_ref(), AgentProviderEvent::Completed { execution, .. }
-                        if execution.response.action_batch.is_some() && execution.response.raw_text.contains("retained-native-candidate"))
+                        if if external {
+                            execution.response.action_batch.as_ref().is_some_and(|batch|
+                                batch.actions.len() == 1 && matches!(&batch.actions[0].payload,
+                                    mez_agent::AgentActionPayload::FetchUrl { url, .. } if Some(url) == expected_external_url.as_ref()))
+                        } else { execution.response.action_batch.is_some() && execution.response.raw_text.contains("retained-native-candidate") })
                 }
                 _ => false,
             };
@@ -510,10 +607,94 @@ async fn qualify(mode: CompletionCase) {
                 if (adopted.applied > 0) != expected { return Err("original Completed adoption disposition changed".to_owned()); }
                 let offers = handle.drain_runtime_side_effects(256).await.unwrap().into_iter().filter_map(|effect| match effect {
                     crate::runtime::RuntimeSideEffect::DispatchNativeShellAction { turn_id, action_id } if turn_id == turn => Some(action_id),
+                    crate::runtime::RuntimeSideEffect::DispatchApprovedExternalAction { turn_id, action_id } if external && turn_id == turn => Some(action_id),
                     _ => None,
                 }).collect::<Vec<_>>();
                 if offers.len() != usize::from(expected) { return Err(format!("native candidate offers: expected {expected}, got {}", offers.len())); }
                 if let Some(action) = offers.first() {
+                    if external {
+                        if mode == CompletionCase::ExternalWriterContention {
+                            let writer = rusqlite::Connection::open(store.path()).unwrap();
+                            writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+                            let refused = handle.claim_approved_external_action(turn.clone(), action.clone()).await.unwrap().is_none();
+                            writer.execute_batch("ROLLBACK").unwrap();
+                            drop(writer);
+                            if !refused { return Err("external claim bypassed the original accounting/policy writer".to_owned()); }
+                        }
+                        let preclaimed = if mode != CompletionCase::ExternalWriterContention {
+                            let crate::runtime::RuntimeBudgetNativeClaimPreparation::Work(mut work) = handle.prepare_budget_external_claim(turn.clone(), action.clone()).await.unwrap() else {
+                                return Err("original external offer did not prepare".to_owned());
+                            };
+                            if mode == CompletionCase::ExternalCaptureDrop {
+                                drop(work);
+                                None
+                            } else {
+                                let claim = if mode == CompletionCase::ExternalObserverDrop {
+                                    let (entered, release) = work.gate_native_writer_for_tests();
+                                    let mut writer = tokio::task::spawn_blocking(move || work.execute());
+                                    tokio::time::timeout(Duration::from_secs(5), entered.notified()).await.unwrap();
+                                    let mut observer = Box::pin(async { (&mut writer).await });
+                                    let pending = observer.as_mut().now_or_never().is_none();
+                                    drop(observer);
+                                    let coalesced = matches!(handle.prepare_budget_external_claim(turn.clone(), action.clone()).await.unwrap(), crate::runtime::RuntimeBudgetNativeClaimPreparation::Refused);
+                                    release.send(()).unwrap();
+                                    let claim = writer.await.unwrap();
+                                    if !pending || !coalesced { return Err("cancelled external observer released active writer custody".to_owned()); }
+                                    claim
+                                } else { tokio::task::spawn_blocking(move || work.execute()).await.unwrap() };
+                                if !matches!(handle.prepare_budget_external_claim(turn.clone(), action.clone()).await.unwrap(), crate::runtime::RuntimeBudgetNativeClaimPreparation::Refused) {
+                                    return Err("duplicate external preparation borrowed the original claim".to_owned());
+                                }
+                                if mode == CompletionCase::ExternalClaimDrop {
+                                    drop(claim);
+                                    None
+                                } else if matches!(mode, CompletionCase::ExternalPause | CompletionCase::ExternalStop) {
+                                    if mode == CompletionCase::ExternalPause {
+                                        waiting::browser_input(&handle, &primary, b"/list-agents --all\r").await;
+                                        waiting::browser_input(&handle, &primary, b"p").await;
+                                        waiting::assert_browser_paused(&handle, "%1", true).await;
+                                    } else { handle.execute_agent_shell_command(primary.clone(), "/stop".into()).await.unwrap(); }
+                                    if handle.finish_budget_external_claim(claim).await.unwrap().is_some() || external_count.load(Ordering::SeqCst) != 0 {
+                                        return Err("paused/stopped original external claim revived".to_owned());
+                                    }
+                                    if mode == CompletionCase::ExternalPause {
+                                        waiting::browser_input(&handle, &primary, b"p").await;
+                                        waiting::assert_browser_paused(&handle, "%1", false).await;
+                                        if handle.claim_approved_external_action(turn.clone(), action.clone()).await.unwrap().is_some() {
+                                            return Err("Resume revived a superseded approval allocation".to_owned());
+                                        }
+                                    }
+                                    return Ok(published);
+                                } else {
+                                    if mode == CompletionCase::ExternalBeforeRecross {
+                                        super::remember_retirement::publish_policy(&store, "post-external-claim", 'e', BudgetLimits {
+                                            input: TokenLimit::Limited(0), output: TokenLimit::Limited(0),
+                                        }).await;
+                                    }
+                                    Some(handle.finish_budget_external_claim(claim).await.unwrap()
+                                        .ok_or_else(|| "writer-claimed original external offer did not transfer".to_owned())?)
+                                }
+                            }
+                        } else { None };
+                        let mut dispatch = if let Some(dispatch) = preclaimed { dispatch } else {
+                            handle.claim_approved_external_action(turn.clone(), action.clone()).await.unwrap()
+                                .ok_or_else(|| "original external offer did not recover".to_owned())?
+                        };
+                        dispatch.accepted_result_for_tests = Some(accepted_external_result.clone());
+                        spawn_owned_agent_provider_worker(&mut native_workers, &mut native_owners, None,
+                            execute_approved_external_action(handle.clone(), dispatch));
+                        let result = tokio::time::timeout(Duration::from_secs(8), native_workers.join_next_with_id()).await
+                            .map_err(|_| "original external monitor did not finish".to_owned())?.unwrap();
+                        record_owned_agent_provider_worker(result, &handle, &mut report, &mut native_owners, &drains).await.map_err(|error| error.to_string())?;
+                        if !accepted_external_result.lock().unwrap().as_ref().is_some_and(|(owner, id, status)| owner == &turn && id == action && *status == mez_agent::ActionStatus::Succeeded) {
+                            return Err("original external result was not successfully actor-accepted".to_owned());
+                        }
+                        if handle.claim_approved_external_action(turn.clone(), action.clone()).await.unwrap().is_some() {
+                            return Err("external offer was claimable twice".to_owned());
+                        }
+                        settle_external_fixture_bookkeeping(&handle).await.map_err(|error| error.to_string())?;
+                        return Ok(published);
+                    }
                     if mode == CompletionCase::NativeClaimRegression {
                         if !handle.reconcile_budget_activity(&turn).await.unwrap() {
                             return Err("original root observation was not adopted".to_owned());
@@ -722,6 +903,10 @@ async fn qualify(mode: CompletionCase) {
         drop(fault_owner);
         server.abort();
         let server_result = server.await;
+        if let Some(server) = external_server {
+            server.abort();
+            let _ = server.await;
+        }
         let cleanup = async {
             let pending: Vec<_> = drains.lock().unwrap().values().cloned().collect();
             for drain in &pending {
@@ -734,6 +919,9 @@ async fn qualify(mode: CompletionCase) {
             handle
                 .execute_agent_shell_command(primary, "/stop".into())
                 .await?;
+            if external {
+                settle_external_fixture_bookkeeping(&handle).await?;
+            }
             handle.shutdown().await
         }
         .await;
@@ -789,9 +977,20 @@ async fn qualify(mode: CompletionCase) {
         }
     );
     assert_eq!(outstanding, 0);
+    if external {
+        assert_eq!(
+            external_count.load(Ordering::SeqCst),
+            usize::from(!matches!(
+                mode,
+                CompletionCase::ExternalPause | CompletionCase::ExternalStop
+            )),
+            "only the original external HTTP effect may execute"
+        );
+    }
     assert_eq!(
         effects,
         if adopt
+            && !external
             && !matches!(
                 mode,
                 CompletionCase::StopBeforeAdoption

@@ -3199,10 +3199,12 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(Ok(self.service.budget_initial_admission_contended(&work)));
                 false
             }
+            #[cfg(test)]
             AsyncRuntimeRequest::PrepareBudgetActivityRead { turn_id, reply } => {
                 let _ = reply.send(self.service.prepare_budget_activity_claim(&turn_id));
                 false
             }
+            #[cfg(test)]
             AsyncRuntimeRequest::ApplyBudgetActivityRead { read, reply } => {
                 let _ = reply.send(self.service.apply_budget_activity_read(*read));
                 false
@@ -3227,6 +3229,29 @@ impl AsyncRuntimeSessionActor {
                 let (turn, action) = (turn.to_owned(), action.to_owned());
                 let result = self.service.finish_budget_native_shell_claim(*claim);
                 self.settle_native_offer(&turn, &action);
+                let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                false
+            }
+            AsyncRuntimeRequest::PrepareBudgetExternalClaim {
+                turn_id,
+                action_id,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.service
+                        .prepare_budget_external_claim(&turn_id, &action_id),
+                );
+                false
+            }
+            AsyncRuntimeRequest::FinishBudgetExternalClaim { claim, reply } => {
+                let (turn, action) = claim.subject();
+                let (turn, action) = (turn.to_owned(), action.to_owned());
+                let result = self.service.finish_budget_external_claim(*claim);
+                self.settle_source_offer(super::SourceDispatch::External(turn, action));
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);
                 if should_notify {

@@ -957,9 +957,10 @@ impl RuntimeSessionService {
                         action.id
                     ),
                 )?;
-                self.agent
-                    .pending_approved_external_actions
-                    .insert((turn.turn_id.clone(), action.id.clone()), None);
+                self.agent.pending_approved_external_actions.insert(
+                    (turn.turn_id.clone(), action.id.clone()),
+                    crate::runtime::agent_state::RuntimeApprovedExternalOffer::new(None),
+                );
             }
             AgentActionPayload::McpCall {
                 server,
@@ -997,7 +998,9 @@ impl RuntimeSessionService {
                 )?;
                 self.agent.pending_approved_external_actions.insert(
                     (turn.turn_id.clone(), action.id.clone()),
-                    approved_schema_generation,
+                    crate::runtime::agent_state::RuntimeApprovedExternalOffer::new(
+                        approved_schema_generation,
+                    ),
                 );
             }
             AgentActionPayload::ConfigChange { .. } => {

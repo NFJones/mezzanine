@@ -624,7 +624,8 @@ pub(crate) struct RuntimeAgentComponent {
     /// validated the approved arguments, so live dispatch can detect that the
     /// metadata an approval covered has changed. Network actions and approvals
     /// with no recorded plan carry `None`.
-    pending_approved_external_actions: BTreeMap<(String, String), Option<String>>,
+    pending_approved_external_actions:
+        BTreeMap<(String, String), super::agent_state::RuntimeApprovedExternalOffer>,
     /// Approved external actions currently owned by async workers.
     claimed_approved_external_actions: BTreeMap<(String, String), String>,
     /// Exact admitted-attempt outcomes/phases, never a worker replay queue.

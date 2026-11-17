@@ -4,7 +4,7 @@
 //! actor. Sealed outcomes can update only their original live membership capture;
 //! stale reads never transfer to a replacement conversation or repository. This
 //! descriptive projection is NOT a grant. The native_claim leaf separately
-//! claims one exact native-shell offer inside the accounting writer order;
+//! claims one exact shell or approved-external offer inside the accounting writer order;
 //! actor transfer still checks original permission/ownership boundaries.
 //! Other effect families, production assembly and automatic release remain staged.
 
@@ -108,6 +108,7 @@ impl RuntimeBudgetActivityWork {
 
     /// Blocking-worker only. No policy mutation, receipt, attempt or effect is
     /// created. The original kernel lease remains owned through the read.
+    #[cfg(test)]
     pub(crate) fn execute(self: Box<Self>) -> Box<RuntimeBudgetActivityRead> {
         #[cfg(test)]
         if self.panic_reader {

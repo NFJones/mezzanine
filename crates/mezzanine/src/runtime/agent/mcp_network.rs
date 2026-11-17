@@ -246,7 +246,9 @@ impl RuntimeSessionService {
             }
             self.agent.pending_approved_external_actions.insert(
                 (turn.turn_id.clone(), action.id.clone()),
-                Some(plan.schema_generation.clone()),
+                crate::runtime::agent_state::RuntimeApprovedExternalOffer::new(Some(
+                    plan.schema_generation.clone(),
+                )),
             );
             queued = queued.saturating_add(1);
         }
@@ -287,9 +289,10 @@ impl RuntimeSessionService {
                 })?;
             match result.status {
                 ActionStatus::Running if can_queue_running_actions => {
-                    self.agent
-                        .pending_approved_external_actions
-                        .insert((turn.turn_id.clone(), action.id.clone()), None);
+                    self.agent.pending_approved_external_actions.insert(
+                        (turn.turn_id.clone(), action.id.clone()),
+                        crate::runtime::agent_state::RuntimeApprovedExternalOffer::new(None),
+                    );
                     queued = queued.saturating_add(1);
                 }
                 ActionStatus::Succeeded | ActionStatus::Failed => {
@@ -418,7 +421,7 @@ impl RuntimeSessionService {
         self.agent
             .pending_approved_external_actions
             .get(&(turn_id.to_string(), action_id.to_string()))
-            .cloned()
+            .map(|offer| offer.schema_generation.clone())
     }
 
     /// Returns the bounded failure that must settle one approved MCP call before
@@ -512,11 +515,75 @@ impl RuntimeSessionService {
         turn_id: &str,
         action_id: &str,
     ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
+        if self.runtime_budget_assembly_enabled() {
+            return Ok(None);
+        }
+        self.claim_approved_external_action_inner(turn_id, action_id, false)
+    }
+
+    /// Capture only the current unissued offer; do not run hooks, reserve a
+    /// completion, or lease transport before native budget authorization.
+    pub(in crate::runtime::agent) fn budget_external_candidate(
+        &self,
+        turn: &str,
+        action: &str,
+    ) -> bool {
+        !self.agent_provider_failure_is_refused(turn)
+            && !self.agent_turn_is_human_paused(turn)
+            && !self.agent.pending_agent_provider_persistence.contains(turn)
+            && !self
+                .agent
+                .claimed_approved_external_actions
+                .keys()
+                .any(|(owner, _)| owner == turn)
+            && self
+                .agent
+                .pending_approved_external_actions
+                .contains_key(&(turn.into(), action.into()))
+            && self.approved_external_action_turn_is_current(turn, action)
+    }
+
+    /// A writer-claimed original offer may survive a later numeric crossing,
+    /// never a changed approval allocation, pause, Stop or schema/owner fence.
+    pub(in crate::runtime::agent) fn claim_approved_external_action_with_budget(
+        &mut self,
+        turn: &str,
+        action: &str,
+        offer: &std::sync::Weak<()>,
+        claim: &crate::runtime::RuntimeBudgetEffectClaim,
+    ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
+        if !claim.transferred()
+            || !self.budget_external_candidate(turn, action)
+            || self
+                .agent
+                .pending_approved_external_actions
+                .get(&(turn.into(), action.into()))
+                .is_none_or(|pending| {
+                    pending.budget_claim.as_ref() != Some(claim)
+                        || !std::sync::Weak::ptr_eq(
+                            offer,
+                            &std::sync::Arc::downgrade(&pending.identity),
+                        )
+                })
+        {
+            return Ok(None);
+        }
+        self.claim_approved_external_action_inner(turn, action, true)
+    }
+
+    fn claim_approved_external_action_inner(
+        &mut self,
+        turn_id: &str,
+        action_id: &str,
+        budget_claimed: bool,
+    ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
         if self.agent_provider_failure_is_refused(turn_id) {
             return Ok(None);
         }
         self.ensure_completion_admission_open()?;
-        if self.agent_turn_is_human_paused(turn_id) || self.budget_activity_inhibits_turn(turn_id) {
+        if self.agent_turn_is_human_paused(turn_id)
+            || (!budget_claimed && self.budget_activity_inhibits_turn(turn_id))
+        {
             return Ok(None);
         }
         let identity = (turn_id.to_string(), action_id.to_string());
@@ -815,6 +882,8 @@ impl RuntimeSessionService {
             attempt: attempt.to_string(),
             cancellation,
             mcp,
+            #[cfg(test)]
+            accepted_result_for_tests: None,
         }))
     }
 

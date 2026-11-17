@@ -1030,11 +1030,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         reply: oneshot::Sender<Result<bool>>,
     },
     /// Captures a bounded root-policy read without doing actor filesystem I/O.
+    #[cfg(test)]
     PrepareBudgetActivityRead {
         turn_id: String,
         reply: oneshot::Sender<crate::runtime::RuntimeBudgetActivityPreparation>,
     },
     /// Adopts only the original live read; never grants an effect or requeues work.
+    #[cfg(test)]
     ApplyBudgetActivityRead {
         read: Box<crate::runtime::RuntimeBudgetActivityRead>,
         reply: oneshot::Sender<bool>,
@@ -1054,6 +1056,17 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     FinishBudgetNativeClaim {
         claim: Box<crate::runtime::RuntimeBudgetNativeClaim>,
         reply: oneshot::Sender<Result<Option<crate::runtime::RuntimeNativeShellDispatch>>>,
+    },
+    /// Captures the original approved-external allocation, not transport state.
+    PrepareBudgetExternalClaim {
+        turn_id: String,
+        action_id: String,
+        reply: oneshot::Sender<crate::runtime::RuntimeBudgetNativeClaimPreparation>,
+    },
+    FinishBudgetExternalClaim {
+        claim: Box<crate::runtime::RuntimeBudgetNativeClaim>,
+        reply:
+            oneshot::Sender<Result<Option<crate::runtime::RuntimeApprovedExternalActionDispatch>>>,
     },
     #[cfg(test)]
     InjectBudgetActivityFault {
@@ -1847,6 +1860,10 @@ impl AsyncRuntimeRequest {
             | Self::ShowPrimaryDisplayOverlay { .. }
             | Self::ShowPrimaryErrorOverlay { .. }
             | Self::TakeRunningPaneProcessesForAdapter { .. } => Family::Terminal,
+            #[cfg(test)]
+            Self::PrepareBudgetActivityRead { .. } | Self::ApplyBudgetActivityRead { .. } => {
+                Family::Provider
+            }
             Self::RefreshProviderInfo { .. }
             | Self::CompleteProviderInfoRefresh { .. }
             | Self::ExecuteAgentShellCommand { .. }
@@ -1860,11 +1877,11 @@ impl AsyncRuntimeRequest {
             | Self::CompleteBookkeepingCandidate { .. }
             | Self::PendingAgentProviderTasks { .. }
             | Self::AgentTurnIsRunning { .. }
-            | Self::PrepareBudgetActivityRead { .. }
-            | Self::ApplyBudgetActivityRead { .. }
             | Self::FailBudgetActivityRead { .. }
             | Self::PrepareBudgetNativeClaim { .. }
             | Self::FinishBudgetNativeClaim { .. }
+            | Self::PrepareBudgetExternalClaim { .. }
+            | Self::FinishBudgetExternalClaim { .. }
             | Self::ParkBudgetAuxiliaryClaim { .. }
             | Self::ResumeBudgetAuxiliaryClaim { .. }
             | Self::SelectBudgetReconsideration { .. }

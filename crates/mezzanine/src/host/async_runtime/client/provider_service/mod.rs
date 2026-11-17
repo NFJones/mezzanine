@@ -1526,6 +1526,8 @@ async fn execute_approved_external_action_inner(
         attempt,
         cancellation: _,
         mcp,
+        #[cfg(test)]
+        accepted_result_for_tests,
     } = dispatch;
     let turn_id = turn.turn_id.clone();
     let action_id = action.id.clone();
@@ -1589,7 +1591,15 @@ async fn execute_approved_external_action_inner(
         .await;
         (result, None)
     };
-    handle
+    #[cfg(test)]
+    let observation = result.as_ref().ok().map(|result| {
+        (
+            result.turn_id.clone(),
+            result.action_id.clone(),
+            result.status,
+        )
+    });
+    let _accepted = handle
         .complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
             turn_id,
             action_id,
@@ -1598,6 +1608,10 @@ async fn execute_approved_external_action_inner(
             mcp_transport,
         })
         .await?;
+    #[cfg(test)]
+    if _accepted && let Some(observer) = accepted_result_for_tests {
+        *observer.lock().unwrap() = observation;
+    }
     Ok(None)
 }
 

@@ -16643,7 +16643,7 @@ requeue a turn or execute an old approved candidate. Root-local capture refusal
 or joined reader failure MUST withhold the affected claim without tearing down
 shared provider work; loss of the actor transport remains an independent error.
 These reads are descriptive and MUST NOT themselves grant an effect.
-Enabled native-shell admission MUST separately claim its exact original offer
+Enabled native-shell and approved-external admission MUST separately claim the exact original offer
 inside the accounting store's writer order, after validating its original native
 binding and current policy/totals. Only the sealed offer-bound atomic transition,
 not the returned snapshot, is budget claim authority. The writer lock MUST be
@@ -16652,6 +16652,10 @@ synthetic usage receipt. A later numeric crossing MUST NOT retroactively revoke
 that issued budget claim. Human pause, Stop, supersession and operational/integrity
 fences remain independent. Dropping an original never-transferred claim MAY
 withdraw only that claim after its worker exits, never replay an issued effect.
+An approved-external claim MUST retain its original approval allocation and schema
+binding, not merely turn/action text. Native authorization MUST precede configured
+MCP hooks and transport leasing; transfer MUST still revalidate the current schema.
+Replacing or removing an approval record MUST revoke any untransferred capture.
 Other families' atomic claim fencing, draining/quiescence proof, every inline
 action boundary and automatic release remain required before production activation.
 
