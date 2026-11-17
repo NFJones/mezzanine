@@ -1069,6 +1069,14 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
             oneshot::Sender<Result<Option<crate::runtime::RuntimeApprovedExternalActionDispatch>>>,
     },
     #[cfg(test)]
+    BudgetMcpSchemaProbeForTests {
+        turn: String,
+        action: String,
+        server: String,
+        refresh: bool,
+        reply: oneshot::Sender<Result<(bool, bool)>>,
+    },
+    #[cfg(test)]
     InjectBudgetActivityFault {
         turn_id: String,
         panic_reader: bool,
@@ -1931,6 +1939,8 @@ impl AsyncRuntimeRequest {
             Self::BudgetTitleClaimIsQuiescent { .. } => Family::Provider,
             #[cfg(test)]
             Self::InjectBudgetActivityFault { .. } => Family::Provider,
+            #[cfg(test)]
+            Self::BudgetMcpSchemaProbeForTests { .. } => Family::Provider,
             #[cfg(test)]
             Self::BudgetRememberClaimIsQuiescent { .. } => Family::Provider,
             #[cfg(test)]

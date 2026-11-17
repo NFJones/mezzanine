@@ -3260,6 +3260,20 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             #[cfg(test)]
+            AsyncRuntimeRequest::BudgetMcpSchemaProbeForTests {
+                turn,
+                action,
+                server,
+                refresh,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.service
+                        .budget_mcp_schema_probe_for_tests(&turn, &action, &server, refresh),
+                );
+                false
+            }
+            #[cfg(test)]
             AsyncRuntimeRequest::InjectBudgetActivityFault {
                 turn_id,
                 panic_reader,

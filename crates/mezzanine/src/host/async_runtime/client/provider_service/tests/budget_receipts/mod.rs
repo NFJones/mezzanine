@@ -11,6 +11,7 @@ mod completion_wait;
 mod dispatch;
 mod exposure;
 mod internal_retry;
+mod mcp_claim;
 mod pre_send;
 mod reconsideration;
 mod remember_retirement;
@@ -91,7 +92,65 @@ struct Prepared {
 }
 
 async fn prepared_case(limits: BudgetLimits) -> Prepared {
+    prepared_case_with_mcp(limits, None).await
+}
+
+async fn prepared_case_with_mcp(limits: BudgetLimits, mcp_url: Option<&str>) -> Prepared {
     let (mut service, agent, turn) = super::incomplete::prepared_fixture("durable wire ACK").await;
+    if let Some(url) = mcp_url {
+        let mut layers = service.config_layers().to_vec();
+        assert_eq!(layers.len(), 1);
+        layers[0].text = layers[0].text.replacen(
+            "[agents]\n",
+            "[agents]\nalways_exposed_mcp_servers=[\"fixture\"]\n",
+            1,
+        );
+        layers[0].text.push_str(&format!(
+            "\n[mcp_servers.fixture]\nurl={}\napproval=\"allow\"\ntool_timeout_ms=3000\n",
+            serde_json::to_string(url).unwrap()
+        ));
+        service.replace_config_layers_async(layers).await.unwrap();
+        assert!(
+            service
+                .mcp_registry()
+                .prompt_summary()
+                .available_tools
+                .iter()
+                .any(|tool| tool.tool_name == "echo")
+        );
+        // A configured catalog is descriptive, not a callable manifest. Obtain
+        // the real fixed-action result and retain its actual retrieval evidence
+        // before freezing this request, rather than assigning tools to dispatch.
+        let result = service
+            .mcp_metadata_result_for_tests(&turn, "fixture")
+            .unwrap();
+        assert_eq!(result.status, mez_agent::ActionStatus::Succeeded);
+        let context = service.agent_turn_contexts_mut().get_mut(&turn).unwrap();
+        let (server, content) =
+            mez_agent::mcp_retrieved_manifest_for_action_result(&result, context).unwrap();
+        let group =
+            mez_agent::ContextExecutionGroupId::new(format!("budget-metadata-{turn}")).unwrap();
+        context
+            .append_assistant_event(
+                "fixture metadata retrieval",
+                "retrieve actual configured MCP metadata",
+                group.clone(),
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                mez_agent::ContextSourceKind::McpRetrievedManifest,
+                format!(
+                    "{}{server}",
+                    mez_agent::MCP_RETRIEVED_MANIFEST_CONTEXT_LABEL_PREFIX
+                ),
+                content,
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+    }
     let path = service
         .agent_transcript_store()
         .unwrap()

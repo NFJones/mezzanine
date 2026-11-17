@@ -1250,6 +1250,24 @@ impl AsyncRuntimeSessionHandle {
     }
 
     #[cfg(test)]
+    pub(crate) async fn budget_mcp_schema_probe_for_tests(
+        &self,
+        turn: String,
+        action: String,
+        server: String,
+        refresh: bool,
+    ) -> Result<(bool, bool)> {
+        self.request(|reply| AsyncRuntimeRequest::BudgetMcpSchemaProbeForTests {
+            turn,
+            action,
+            server,
+            refresh,
+            reply,
+        })
+        .await?
+    }
+
+    #[cfg(test)]
     pub(crate) async fn inject_budget_activity_fault(
         &self,
         turn_id: String,

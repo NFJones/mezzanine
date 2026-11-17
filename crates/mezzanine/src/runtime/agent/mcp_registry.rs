@@ -16,6 +16,90 @@ use super::{
 };
 
 impl RuntimeSessionService {
+    /// Passive fixture lookup through the real fixed-action executor. Returning
+    /// metadata does not itself install a manifest or authorize any tool call.
+    #[cfg(test)]
+    pub(crate) fn mcp_metadata_result_for_tests(
+        &self,
+        turn_id: &str,
+        server: &str,
+    ) -> Result<ActionResult> {
+        let turn = self
+            .agent_turn_ledger()
+            .turn(turn_id)
+            .ok_or_else(|| MezError::invalid_state("fixture metadata owner unavailable"))?;
+        self.execute_mcp_discovery_action(
+            turn,
+            &AgentAction {
+                id: "budget-fixture-get".into(),
+                payload: AgentActionPayload::McpServerGet {
+                    server: server.into(),
+                },
+            },
+        )
+    }
+
+    /// Acceptance-only metadata refresh and original-result observation. The
+    /// refresh uses the same registry adoption operation as native discovery;
+    /// it never creates a transport, approval, result, or budget grant. Returns
+    /// only transport presence and exact-action schema-failure presence, not
+    /// private execution/context payloads.
+    #[cfg(test)]
+    pub(crate) fn budget_mcp_schema_probe_for_tests(
+        &mut self,
+        turn: &str,
+        action: &str,
+        server: &str,
+        refresh: bool,
+    ) -> Result<(bool, bool)> {
+        if refresh {
+            let mut tools = self
+                .mcp_registry()
+                .list_servers()
+                .into_iter()
+                .find(|state| state.configured.id == server)
+                .ok_or_else(|| MezError::invalid_state("fixture MCP server unavailable"))?
+                .tools
+                .clone();
+            let tool = tools
+                .iter_mut()
+                .find(|tool| tool.name == "echo")
+                .ok_or_else(|| MezError::invalid_state("fixture MCP tool unavailable"))?;
+            let mut schema: serde_json::Value = serde_json::from_str(&tool.input_schema_json)
+                .map_err(|error| MezError::invalid_state(error.to_string()))?;
+            schema["properties"]["message"]["minLength"] = serde_json::json!(1);
+            tool.input_schema_json = schema.to_string();
+            self.mcp_registry_mut().mark_available(server, tools, 2)?;
+        }
+        let header = format!("[action_result {action} mcp_call failed]");
+        let has_schema_failure = |content: &str| {
+            content.contains(&header) && content.contains("error: mcp_schema_changed")
+        };
+        let schema_failure = self
+            .retained_completion_execution_for_tests(turn)
+            .and_then(|execution| {
+                execution
+                    .action_results
+                    .iter()
+                    .find(|result| result.action_id == action)
+            })
+            .map(mez_agent::action_result_context_content)
+            .is_some_and(|content| has_schema_failure(&content))
+            || self.agent_turn_contexts().get(turn).is_some_and(|context| {
+                context
+                    .blocks()
+                    .iter()
+                    .any(|block| has_schema_failure(&block.content))
+            });
+        Ok((
+            self.integration
+                .mcp_transports_mut()
+                .transports
+                .contains_key(server),
+            schema_failure,
+        ))
+    }
+
     /// Executes pending fixed MCP discovery actions for one running turn.
     pub(crate) fn execute_running_mcp_discovery_actions_for_turn(
         &mut self,

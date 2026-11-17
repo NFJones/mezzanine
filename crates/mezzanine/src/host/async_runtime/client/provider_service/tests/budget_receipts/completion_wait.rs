@@ -50,6 +50,19 @@ async fn budget_completed_response_external_claim_orders_after_existing_writer()
 }
 
 #[tokio::test]
+async fn budget_completed_response_mcp_claim_uses_physical_discovery_and_writer_order() {
+    for mode in [
+        CompletionCase::McpWriterContention,
+        CompletionCase::McpBeforeRecross,
+        CompletionCase::McpPostFence,
+        CompletionCase::McpSchemaDrift,
+        CompletionCase::McpStop,
+    ] {
+        Box::pin(qualify(mode)).await;
+    }
+}
+
+#[tokio::test]
 async fn budget_completed_response_external_claim_boundary_and_withdrawal_are_once_only() {
     for mode in [
         CompletionCase::ExternalBeforeRecross,
@@ -146,6 +159,11 @@ enum CompletionCase {
     ClaimRecross,
     ClaimWriterContention,
     ExternalWriterContention,
+    McpWriterContention,
+    McpBeforeRecross,
+    McpPostFence,
+    McpSchemaDrift,
+    McpStop,
     ExternalBeforeRecross,
     ExternalClaimDrop,
     ExternalCaptureDrop,
@@ -199,16 +217,30 @@ async fn settle_external_fixture_bookkeeping(
 }
 
 async fn qualify(mode: CompletionCase) {
-    let external = matches!(
+    let mcp = matches!(
         mode,
-        CompletionCase::ExternalWriterContention
-            | CompletionCase::ExternalBeforeRecross
-            | CompletionCase::ExternalClaimDrop
-            | CompletionCase::ExternalCaptureDrop
-            | CompletionCase::ExternalObserverDrop
-            | CompletionCase::ExternalPause
-            | CompletionCase::ExternalStop
+        CompletionCase::McpWriterContention
+            | CompletionCase::McpBeforeRecross
+            | CompletionCase::McpPostFence
+            | CompletionCase::McpSchemaDrift
+            | CompletionCase::McpStop
     );
+    let mcp_fixture = if mcp {
+        Some(super::mcp_claim::Fixture::start().await)
+    } else {
+        None
+    };
+    let external = mcp
+        || matches!(
+            mode,
+            CompletionCase::ExternalWriterContention
+                | CompletionCase::ExternalBeforeRecross
+                | CompletionCase::ExternalClaimDrop
+                | CompletionCase::ExternalCaptureDrop
+                | CompletionCase::ExternalObserverDrop
+                | CompletionCase::ExternalPause
+                | CompletionCase::ExternalStop
+        );
     let stop = matches!(mode, CompletionCase::Stop | CompletionCase::StopAfterResume);
     let read_failure = mode == CompletionCase::ReadFailure;
     let adopt = matches!(
@@ -217,6 +249,11 @@ async fn qualify(mode: CompletionCase) {
             | CompletionCase::ClaimRecross
             | CompletionCase::ClaimWriterContention
             | CompletionCase::ExternalWriterContention
+            | CompletionCase::McpWriterContention
+            | CompletionCase::McpBeforeRecross
+            | CompletionCase::McpPostFence
+            | CompletionCase::McpSchemaDrift
+            | CompletionCase::McpStop
             | CompletionCase::ExternalBeforeRecross
             | CompletionCase::ExternalClaimDrop
             | CompletionCase::ExternalCaptureDrop
@@ -250,10 +287,13 @@ async fn qualify(mode: CompletionCase) {
         store,
         member,
         mut root,
-    } = prepared_case(BudgetLimits {
-        input: TokenLimit::Limited(11),
-        output: TokenLimit::Limited(3),
-    })
+    } = prepared_case_with_mcp(
+        BudgetLimits {
+            input: TokenLimit::Limited(11),
+            output: TokenLimit::Limited(3),
+        },
+        mcp_fixture.as_ref().map(|fixture| fixture.url.as_str()),
+    )
     .await;
     let resume_gate = if matches!(
         mode,
@@ -269,9 +309,9 @@ async fn qualify(mode: CompletionCase) {
     } else {
         None
     };
-    // Only this private native-effect control bypasses interactive approval;
-    // policy/scope admission and actual executor/retirement remain production.
-    if adopt {
+    // Existing shell/fetch controls bypass interactive approval. MCP instead
+    // exercises its configured allow policy without bypassing native checks.
+    if adopt && !mcp {
         service.permission_policy_mut().set_approval_bypass(true);
     }
     let counter = root.0.as_ref().unwrap().join("retained-candidate-count");
@@ -293,9 +333,12 @@ async fn qualify(mode: CompletionCase) {
         .clone();
     let turn = dispatch.turn.turn_id.clone();
     let agent = AgentId::opaque(dispatch.turn.agent_id.clone()).unwrap();
-    let external_count = Arc::new(AtomicUsize::new(0));
+    let external_count = mcp_fixture
+        .as_ref()
+        .map(|fixture| fixture.calls.clone())
+        .unwrap_or_else(|| Arc::new(AtomicUsize::new(0)));
     let accepted_external_result = Arc::new(std::sync::Mutex::new(None));
-    let external_listener = if external {
+    let external_listener = if external && !mcp {
         Some(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap())
     } else {
         None
@@ -350,7 +393,9 @@ async fn qualify(mode: CompletionCase) {
             assert!(bytes.len() < 1024 * 1024);
         }
         count.fetch_add(1, Ordering::SeqCst);
-        let content = if let Some(url) = external_url {
+        let content = if mcp {
+            serde_json::json!({"rationale":"fixture", "actions":[{"type":"mcp_call","server":"fixture","tool":"echo","arguments":serde_json::json!({"message":"original"}).to_string()}]}).to_string()
+        } else if let Some(url) = external_url {
             serde_json::json!({"rationale":"fixture", "actions":[{"type":"fetch_url", "url":url}]})
                 .to_string()
         } else {
@@ -532,7 +577,12 @@ async fn qualify(mode: CompletionCase) {
                         return Err("original crossing/release observation was not delivered".to_owned());
                     }
                     matches!(completion.as_ref(), AgentProviderEvent::Completed { execution, .. }
-                        if if external {
+                        if if mcp {
+                            execution.response.action_batch.as_ref().is_some_and(|batch|
+                                batch.actions.len() == 1 && matches!(&batch.actions[0].payload,
+                                    mez_agent::AgentActionPayload::McpCall { server, tool, arguments_json }
+                                        if server == "fixture" && tool == "echo" && serde_json::from_str::<serde_json::Value>(arguments_json).unwrap() == serde_json::json!({"message":"original"})))
+                        } else if external {
                             execution.response.action_batch.as_ref().is_some_and(|batch|
                                 batch.actions.len() == 1 && matches!(&batch.actions[0].payload,
                                     mez_agent::AgentActionPayload::FetchUrl { url, .. } if Some(url) == expected_external_url.as_ref()))
@@ -613,7 +663,18 @@ async fn qualify(mode: CompletionCase) {
                 if offers.len() != usize::from(expected) { return Err(format!("native candidate offers: expected {expected}, got {}", offers.len())); }
                 if let Some(action) = offers.first() {
                     if external {
-                        if mode == CompletionCase::ExternalWriterContention {
+                        if mode == CompletionCase::McpPostFence {
+                            super::remember_retirement::publish_policy(&store, "post-mcp-offer", 'e', BudgetLimits {
+                                input: TokenLimit::Limited(11), output: TokenLimit::Limited(3),
+                            }).await;
+                            let refused = handle.claim_approved_external_action(turn.clone(), action.clone()).await.unwrap().is_none();
+                            let (transport_owned, _) = handle.budget_mcp_schema_probe_for_tests(turn.clone(), action.clone(), "fixture".into(), false).await.unwrap();
+                            if !refused || !transport_owned || external_count.load(Ordering::SeqCst) != 0 {
+                                return Err("post-fence MCP offer leased or executed transport".to_owned());
+                            }
+                            return Ok(published);
+                        }
+                        if matches!(mode, CompletionCase::ExternalWriterContention | CompletionCase::McpWriterContention) {
                             let writer = rusqlite::Connection::open(store.path()).unwrap();
                             writer.execute_batch("BEGIN IMMEDIATE").unwrap();
                             let refused = handle.claim_approved_external_action(turn.clone(), action.clone()).await.unwrap().is_none();
@@ -621,7 +682,7 @@ async fn qualify(mode: CompletionCase) {
                             drop(writer);
                             if !refused { return Err("external claim bypassed the original accounting/policy writer".to_owned()); }
                         }
-                        let preclaimed = if mode != CompletionCase::ExternalWriterContention {
+                        let preclaimed = if !matches!(mode, CompletionCase::ExternalWriterContention | CompletionCase::McpWriterContention) {
                             let crate::runtime::RuntimeBudgetNativeClaimPreparation::Work(mut work) = handle.prepare_budget_external_claim(turn.clone(), action.clone()).await.unwrap() else {
                                 return Err("original external offer did not prepare".to_owned());
                             };
@@ -645,10 +706,20 @@ async fn qualify(mode: CompletionCase) {
                                 if !matches!(handle.prepare_budget_external_claim(turn.clone(), action.clone()).await.unwrap(), crate::runtime::RuntimeBudgetNativeClaimPreparation::Refused) {
                                     return Err("duplicate external preparation borrowed the original claim".to_owned());
                                 }
+                                if mode == CompletionCase::McpSchemaDrift {
+                                    let (owned_before, _) = handle.budget_mcp_schema_probe_for_tests(turn.clone(), action.clone(), "fixture".into(), true).await.unwrap();
+                                    let refused = handle.finish_budget_external_claim(claim).await.unwrap().is_none();
+                                    let (owned_after, schema_failure) = handle.budget_mcp_schema_probe_for_tests(turn.clone(), action.clone(), "fixture".into(), false).await.unwrap();
+                                    if !owned_before || !owned_after || !refused || external_count.load(Ordering::SeqCst) != 0
+                                        || !schema_failure {
+                                        return Err("changed MCP schema lost original transport or exact failure evidence".to_owned());
+                                    }
+                                    return Ok(published);
+                                }
                                 if mode == CompletionCase::ExternalClaimDrop {
                                     drop(claim);
                                     None
-                                } else if matches!(mode, CompletionCase::ExternalPause | CompletionCase::ExternalStop) {
+                                } else if matches!(mode, CompletionCase::ExternalPause | CompletionCase::ExternalStop | CompletionCase::McpStop) {
                                     if mode == CompletionCase::ExternalPause {
                                         waiting::browser_input(&handle, &primary, b"/list-agents --all\r").await;
                                         waiting::browser_input(&handle, &primary, b"p").await;
@@ -666,7 +737,7 @@ async fn qualify(mode: CompletionCase) {
                                     }
                                     return Ok(published);
                                 } else {
-                                    if mode == CompletionCase::ExternalBeforeRecross {
+                                    if matches!(mode, CompletionCase::ExternalBeforeRecross | CompletionCase::McpBeforeRecross) {
                                         super::remember_retirement::publish_policy(&store, "post-external-claim", 'e', BudgetLimits {
                                             input: TokenLimit::Limited(0), output: TokenLimit::Limited(0),
                                         }).await;
@@ -934,6 +1005,11 @@ async fn qualify(mode: CompletionCase) {
     };
     let ((exercise, server_result, cleanup, retired_without_fallback), mut exit) =
         tokio::join!(control, actor.run());
+    let mcp_cleanup = if let Some(fixture) = mcp_fixture {
+        fixture.stop().await
+    } else {
+        Ok(())
+    };
     exit.service.terminate_all_pane_processes().unwrap();
     let known = store.budget_account(&member.root).unwrap().known;
     let effects = std::fs::read(&counter).unwrap_or_default();
@@ -943,6 +1019,7 @@ async fn qualify(mode: CompletionCase) {
     drop((exit, handle, drains));
     root.cleanup();
     cleanup.unwrap();
+    mcp_cleanup.unwrap();
     assert!(server_result.unwrap_err().is_cancelled());
     let published = match exercise {
         Ok(Err(error)) if mode == CompletionCase::MonitorError => {
@@ -982,7 +1059,11 @@ async fn qualify(mode: CompletionCase) {
             external_count.load(Ordering::SeqCst),
             usize::from(!matches!(
                 mode,
-                CompletionCase::ExternalPause | CompletionCase::ExternalStop
+                CompletionCase::ExternalPause
+                    | CompletionCase::ExternalStop
+                    | CompletionCase::McpPostFence
+                    | CompletionCase::McpSchemaDrift
+                    | CompletionCase::McpStop
             )),
             "only the original external HTTP effect may execute"
         );
