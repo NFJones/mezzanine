@@ -663,6 +663,258 @@ async fn async_actor_interruption_bookkeeping_survives_locked_replacement() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Captured metadata must be qualified before any SQLite action, not after an
+/// earlier mutation. Faults are injected into actor-produced Work, not claimed
+/// to be accepted wire input. The normal control adopts the real outcome once
+/// and rejects its duplicate without replaying either write.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_persistence_validates_complete_action_frame_before_writes() {
+    for fault in [
+        "none",
+        "missing",
+        "payload",
+        "duplicate_result",
+        "duplicate_action",
+        "owner",
+        "result_agent",
+        "request_owner",
+        "missing_result",
+        "empty_action",
+        "missing_batch",
+    ] {
+        let root = std::env::temp_dir().join(format!(
+            "mez-persistence-frame-{}-{}-{}",
+            std::process::id(),
+            fault,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        // Retain exact diagnostics if setup or cleanup cannot prove retirement.
+        struct RetainedRoot(Option<std::path::PathBuf>);
+        impl Drop for RetainedRoot {
+            fn drop(&mut self) {
+                if let Some(root) = &self.0 {
+                    eprintln!("persistence frame fixture retained: {}", root.display());
+                }
+            }
+        }
+        let mut retained = RetainedRoot(Some(root.clone()));
+        let mut service = test_service();
+        service.set_config_root(root.clone());
+        service.set_agent_transcript_store(AgentTranscriptStore::new(root.join("transcripts")));
+        let primary = service
+            .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+            .unwrap();
+        service
+            .start_initial_pane_process(Some("cat >/dev/null"))
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service
+            .execute_agent_shell_command(&primary, "record two issues")
+            .unwrap();
+        let task = service.pending_agent_provider_tasks()[0].clone();
+        let turn = service
+            .agent_turn_ledger()
+            .turn(&task.turn_id)
+            .unwrap()
+            .clone();
+        let mut execution = fork_issue_execution(&task, &turn);
+        let first = execution.response.action_batch.as_ref().unwrap().actions[1].clone();
+        let mut second = first.clone();
+        second.id = "second-issue".to_string();
+        let memory = mez_agent::AgentAction {
+            id: "first-memory".to_string(),
+            payload: mez_agent::AgentActionPayload::MemoryStore {
+                kind: "fact".to_string(),
+                priority: Some(50),
+                scope: Some("global".to_string()),
+                keywords: vec!["fixture".to_string()],
+                content: "A generated persistence-frame fixture fact.".to_string(),
+                expires_in_days: Some(1),
+            },
+        };
+        execution.request.memory_actions_enabled = true;
+        let actions = vec![memory, first, second];
+        execution.action_results = actions
+            .iter()
+            .map(|action| mez_agent::ActionResult::running(&turn, action, Vec::new(), None))
+            .collect();
+        execution.response.action_batch.as_mut().unwrap().actions = actions;
+        let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+            .build()
+            .unwrap();
+        let shutdown = handle.clone();
+        let client_root = root.clone();
+        let client = tokio::spawn(async move {
+            handle
+                .record_claimed_agent_provider_task_for_tests(task.turn_id.clone(), 1)
+                .await
+                .unwrap();
+            let mut batch = RuntimeEventBatch::new();
+            batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
+                agent_id: AgentId::opaque(task.agent_id.clone()).unwrap(),
+                turn_id: task.turn_id.clone(),
+                claim_generation: 1,
+                execution: Box::new(execution),
+            }));
+            assert_eq!(
+                handle.submit_runtime_events(batch).await.unwrap().applied,
+                1
+            );
+            let mut work = handle
+                .drain_persistence_side_effects(64)
+                .await
+                .unwrap()
+                .into_iter()
+                .find_map(|effect| match effect {
+                    RuntimeSideEffect::SettleAgentProviderPersistence { work } => Some(work),
+                    _ => None,
+                })
+                .expect("actor must capture the ordinary issue phase");
+            assert!(work.memory_enabled && work.issues_enabled && work.fork_read.is_none());
+            assert_eq!(
+                work.memory_store.as_ref().unwrap().path(),
+                client_root.join("memory.sqlite")
+            );
+            match fault {
+                "missing" => work.execution.action_results[2].action_id = "absent".into(),
+                "payload" => {
+                    work.execution
+                        .response
+                        .action_batch
+                        .as_mut()
+                        .unwrap()
+                        .actions[2]
+                        .payload = mez_agent::AgentActionPayload::ListAgents {
+                        agent_type: None,
+                        scope: None,
+                    }
+                }
+                "duplicate_result" => {
+                    let duplicate = work.execution.action_results[0].clone();
+                    work.execution.action_results.push(duplicate);
+                }
+                "duplicate_action" => {
+                    let batch = work.execution.response.action_batch.as_mut().unwrap();
+                    batch.actions.push(batch.actions[0].clone());
+                }
+                "owner" => work.execution.action_results[2].turn_id = "foreign-turn".into(),
+                "result_agent" => {
+                    work.execution.action_results[2].agent_id = "foreign-agent".into()
+                }
+                "request_owner" => work.execution.request.turn_id = "foreign-turn".into(),
+                "missing_result" => {
+                    work.execution.action_results.pop();
+                }
+                "empty_action" => work
+                    .execution
+                    .response
+                    .action_batch
+                    .as_mut()
+                    .unwrap()
+                    .actions[2]
+                    .id
+                    .clear(),
+                "missing_batch" => work.execution.response.action_batch = None,
+                "none" => {}
+                _ => unreachable!(),
+            }
+            let outcome = tokio::task::spawn_blocking(move || {
+                crate::runtime::execute_agent_provider_persistence_work(*work)
+            })
+            .await
+            .unwrap();
+            let count = if client_root.join("issues.sqlite").exists() {
+                let connection =
+                    rusqlite::Connection::open(client_root.join("issues.sqlite")).unwrap();
+                connection
+                    .query_row("SELECT COUNT(*) FROM issues", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap()
+            } else {
+                0
+            };
+            let memory_count = if client_root.join("memory.sqlite").exists() {
+                let connection =
+                    rusqlite::Connection::open(client_root.join("memory.sqlite")).unwrap();
+                connection
+                    .query_row("SELECT COUNT(*) FROM memory_records", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap()
+            } else {
+                0
+            };
+            if fault == "none" {
+                let outcome = outcome.unwrap();
+                assert_eq!(outcome.issue_results.len(), 2);
+                assert_eq!(outcome.memory_results.len(), 1);
+                assert_eq!(memory_count, 1);
+                assert_eq!(count, 2);
+                for (index, applied) in [1, 0].into_iter().enumerate() {
+                    let mut batch = RuntimeEventBatch::new();
+                    batch.push(RuntimeEvent::AgentProvider(
+                        AgentProviderEvent::PersistenceSettled {
+                            outcome: Box::new(outcome.clone()),
+                        },
+                    ));
+                    assert_eq!(
+                        handle.submit_runtime_events(batch).await.unwrap().applied,
+                        applied,
+                        "outcome adoption {index} must not repeat physical actions"
+                    );
+                }
+                for (file, sql, expected) in [
+                    ("memory.sqlite", "SELECT COUNT(*) FROM memory_records", 1),
+                    ("issues.sqlite", "SELECT COUNT(*) FROM issues", 2),
+                ] {
+                    let connection = rusqlite::Connection::open(client_root.join(file)).unwrap();
+                    let count = connection
+                        .query_row(sql, [], |row| row.get::<_, i64>(0))
+                        .unwrap();
+                    assert_eq!(count, expected, "adoption replayed {file} writes");
+                }
+            } else {
+                assert_eq!(
+                    count, 0,
+                    "{fault}: malformed captured frame committed an earlier action"
+                );
+                assert_eq!(
+                    memory_count, 0,
+                    "{fault}: malformed frame committed a memory action"
+                );
+                assert!(outcome.is_err(), "{fault}: malformed frame was not refused");
+            }
+            assert_eq!(
+                handle.lifecycle_state().await.unwrap(),
+                RuntimeLifecycleState::Running
+            );
+        });
+        let (result, mut exit) = tokio::join!(
+            async {
+                let result = client.await;
+                shutdown.shutdown().await.unwrap();
+                result
+            },
+            actor.run()
+        );
+        exit.service.terminate_all_pane_processes().unwrap();
+        drop(exit);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(!root.exists());
+        retained.0 = None;
+        // Re-raise only after the actor/processes and exact root retire.
+        result.unwrap();
+    }
+}
+
 /// Builds a provider execution with a fork before a durable issue action.
 fn fork_issue_execution(
     task: &crate::runtime::RuntimeAgentProviderTask,

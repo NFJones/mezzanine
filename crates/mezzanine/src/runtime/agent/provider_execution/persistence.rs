@@ -5,7 +5,9 @@
 //! or performs SQLite-backed memory and issue actions in separate phases,
 //! preserving family ordering before returning typed
 //! results for actor-owned audit, presentation, scheduler, and continuation
-//! application.
+//! application. The complete captured action identity frame is checked before
+//! any memory/issue effects. This structural check is not budget admission,
+//! argument validation, or permission to replay an issued action.
 
 use super::super::{
     ActionStatus, AgentActionPayload, AgentTurnState, MezError, Result,
@@ -80,6 +82,11 @@ pub(crate) fn execute_agent_provider_persistence_work(
         });
     }
     let Some(batch) = execution.response.action_batch.as_ref() else {
+        if !execution.action_results.is_empty() {
+            return Err(MezError::invalid_state(
+                "provider persistence results have no captured action batch",
+            ));
+        }
         return Ok(RuntimeAgentProviderPersistenceOutcome {
             turn,
             generation,
@@ -98,6 +105,43 @@ pub(crate) fn execute_agent_provider_persistence_work(
             settled_action_results_before_persistence,
         });
     };
+
+    // A late missing/aliased/foreign result must not turn an earlier committed
+    // action into an error with no returned result. Qualify the entire captured
+    // frame before either family; later execution still uses original indexes.
+    if execution.request.turn_id != turn.turn_id || execution.request.agent_id != turn.agent_id {
+        return Err(MezError::invalid_state(
+            "provider persistence execution owner does not match captured turn",
+        ));
+    }
+    let mut actions = std::collections::BTreeMap::new();
+    for action in &batch.actions {
+        if action.id.is_empty() || actions.insert(action.id.as_str(), action).is_some() {
+            return Err(MezError::invalid_state(
+                "provider persistence action identity is empty or duplicated",
+            ));
+        }
+    }
+    let mut result_ids = std::collections::BTreeSet::new();
+    for pending in &execution.action_results {
+        let action = actions.get(pending.action_id.as_str()).ok_or_else(|| {
+            MezError::invalid_state("provider persistence result does not match an action")
+        })?;
+        if pending.turn_id != turn.turn_id
+            || pending.agent_id != turn.agent_id
+            || pending.action_type != action.action_type()
+            || !result_ids.insert(pending.action_id.as_str())
+        {
+            return Err(MezError::invalid_state(
+                "provider persistence result identity does not match captured action",
+            ));
+        }
+    }
+    if result_ids.len() != actions.len() {
+        return Err(MezError::invalid_state(
+            "provider persistence action is missing its captured result",
+        ));
+    }
 
     let mut projected_results = execution.action_results.clone();
     let mut memory_results = Vec::new();

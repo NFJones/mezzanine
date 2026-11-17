@@ -388,6 +388,14 @@ cancel already-issued patch effects or bypass their receipts/archive settlement.
 Other families' atomic fencing, all inline boundaries, drain proof and qualified
 automatic release remain unfinished.
 
+Before its first memory or issue action, the deferred persistence worker checks
+the complete captured action/result identity frame: unique nonempty action IDs,
+one matching result per action, matching action types and original turn/agent.
+An identity-malformed later row therefore cannot discard an earlier SQLite mutation's
+result. This structural preflight is not argument validation, a transaction
+covering all actions, budget admission, or permission to replay issued work;
+other post-issue errors still require original result custody.
+
 These internal allocation and accounting ports do **not** yet enable operational
 session budgets. The provider waiting, accounting and retirement paths above must
 still be assembled with root-wide activity inhibition and persistent policy/UI
