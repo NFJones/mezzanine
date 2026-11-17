@@ -390,9 +390,10 @@ async fn runtime_budget_provider_wait_host_retains_pressure_and_sibling_failure(
                 .fail_next_scheduler_start_post_admission_for_tests();
         }
         let service = std::mem::replace(&mut scene.service, test_runtime_service());
-        let (handle, actor) =
+        let (handle, mut actor) =
             crate::host::async_runtime::AsyncRuntimeSessionActor::new(service, Default::default())
                 .unwrap();
+        let history_workers = actor.retain_history_workers_for_tests();
         let client = async {
             assert!(
                 handle
@@ -499,6 +500,13 @@ async fn runtime_budget_provider_wait_host_retains_pressure_and_sibling_failure(
         };
         let ((), exit) = tokio::join!(client, actor.run());
         scene.service = exit.service;
+        // Shutdown closes actor ingress, not detached history I/O. Keep the
+        // original store/binding alive until its actual reader/writer tasks join.
+        // A post-admission startup failure may need no history task at all.
+        tokio::time::timeout(Duration::from_secs(30), history_workers.join())
+            .await
+            .expect("budget fixture retained an unfinished history task")
+            .unwrap();
     }
 }
 

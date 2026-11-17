@@ -74,6 +74,7 @@ mod enrollment;
 mod events;
 mod external_usage_retry;
 mod handle;
+mod history_workers;
 /// Whole-payload initial fork persistence settlement and startup fencing.
 mod initial_transcripts;
 pub(super) mod message_custody;
@@ -88,6 +89,9 @@ mod source_end;
 pub(super) mod terminal_layout;
 
 pub(super) use provider_handoff::{BudgetPreparation, SourceDispatch};
+
+#[cfg(test)]
+pub(crate) use history_workers::HistoryWorkerFixture;
 
 #[cfg(test)]
 mod tests;

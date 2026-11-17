@@ -54,6 +54,13 @@ impl AsRef<std::path::Path> for OwnedRoot {
 }
 impl Drop for OwnedRoot {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            eprintln!(
+                "owned budget fixture retained during unwind: {}",
+                self.0.display()
+            );
+            return;
+        }
         fs::remove_dir_all(&self.0).unwrap_or_else(|error| {
             panic!(
                 "owned budget fixture cleanup retained {}: {error}",

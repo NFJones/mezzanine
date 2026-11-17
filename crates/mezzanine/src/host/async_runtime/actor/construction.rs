@@ -337,6 +337,8 @@ impl AsyncRuntimeSessionActor {
             refused_dispatch_sources: Default::default(),
             source_refill_cursor: 0,
             transcript_receipt_predecessor: None,
+            #[cfg(test)]
+            history_workers_for_tests: None,
             side_effect_queue_nonempty_since: None,
             pane_input_leases: Default::default(),
             timers: Default::default(),

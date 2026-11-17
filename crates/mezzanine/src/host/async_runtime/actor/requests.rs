@@ -525,12 +525,11 @@ impl AsyncRuntimeSessionActor {
     /// Admits a control continuation without waiting on the actor's own bounded ingress.
     pub(super) fn dispatch_control_continuation(&self, continuation: Box<AsyncRuntimeRequest>) {
         let sender = self.sender.clone();
-        let task = tokio::spawn(async move {
+        self.spawn_history_worker(async move {
             let _ = sender
                 .send(AsyncRuntimeRequestEnvelope::new(*continuation))
                 .await;
         });
-        std::mem::drop(task);
     }
 
     /// Holds newly queued transcript claims and syncs receipts in enqueue order
@@ -554,7 +553,7 @@ impl AsyncRuntimeSessionActor {
         let predecessor = self.transcript_receipt_predecessor.take();
         let (finished, successor) = tokio::sync::oneshot::channel();
         self.transcript_receipt_predecessor = Some(successor);
-        tokio::spawn(async move {
+        self.spawn_history_worker(async move {
             if let Some(predecessor) = predecessor {
                 let _ = predecessor.await;
             }
@@ -651,7 +650,7 @@ impl AsyncRuntimeSessionActor {
                         }
                     }
                     let sender = self.sender.clone();
-                    tokio::spawn(async move {
+                    self.spawn_history_worker(async move {
                         #[cfg(test)]
                         let probe = work.preparation_probe_for_tests();
                         #[cfg(test)]
@@ -693,7 +692,7 @@ impl AsyncRuntimeSessionActor {
                 continue;
             }
             let sender = self.sender.clone();
-            let join_handle = tokio::spawn(async move {
+            self.spawn_history_worker(async move {
                 #[cfg(test)]
                 if let (Some(started), Some(release)) = (
                     dispatch.prompt_history_preparation_started.as_ref(),
@@ -722,7 +721,6 @@ impl AsyncRuntimeSessionActor {
                     ))
                     .await;
             });
-            std::mem::drop(join_handle);
         }
     }
 
@@ -732,7 +730,7 @@ impl AsyncRuntimeSessionActor {
     pub(super) fn dispatch_manual_compaction_preparations(&mut self) {
         for work in self.service.take_manual_compaction_preparations() {
             let sender = self.sender.clone();
-            tokio::spawn(async move {
+            self.spawn_history_worker(async move {
                 #[cfg(test)]
                 if let Some((started, release, _)) = work.probe.as_ref() {
                     started.notify_one();
@@ -759,7 +757,7 @@ impl AsyncRuntimeSessionActor {
         }
         for work in self.service.take_manual_compaction_requests() {
             let sender = self.sender.clone();
-            tokio::spawn(async move {
+            self.spawn_history_worker(async move {
                 #[cfg(test)]
                 if let Some((started, release, _)) = work.probe.as_ref() {
                     started.notify_one();
@@ -790,7 +788,7 @@ impl AsyncRuntimeSessionActor {
     pub(super) fn dispatch_bookkeeping_candidates(&mut self) {
         for work in self.service.claim_bookkeeping_candidates() {
             let sender = self.sender.clone();
-            tokio::spawn(async move {
+            self.spawn_history_worker(async move {
                 let read_work = work.clone();
                 let history = tokio::task::spawn_blocking(move || read_work.execute())
                     .await

@@ -375,6 +375,7 @@ pub(super) async fn next_completion(actor: &mut AsyncRuntimeSessionActor) -> Asy
 #[tokio::test(flavor = "current_thread")]
 async fn accepted_bookkeeping_completion_recovers_released_provider() {
     let (_root, mut actor, primary, dispatch) = history_at_capacity();
+    let history_workers = actor.retain_history_workers_for_tests();
     let history =
         crate::runtime::execute_runtime_agent_prompt_history_work(dispatch.history_work.clone());
     assert!(
@@ -480,6 +481,15 @@ async fn accepted_bookkeeping_completion_recovers_released_provider() {
     actor
         .service
         .cancel_agent_session_title_task(&turn.conversation_id);
+    // A received receipt proves the write result, not the wrapper's exit.
+    // Close ingress and drop the actor before observing its original handles.
+    actor.sender.close();
+    drop(actor);
+    let joined = tokio::time::timeout(std::time::Duration::from_secs(5), history_workers.join())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(joined > 0, "actual receipt admission was not retained");
 }
 
 /// Checked bookkeeping is an accepted source boundary too. Fill the original

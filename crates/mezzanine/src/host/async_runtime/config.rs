@@ -942,6 +942,9 @@ pub struct AsyncRuntimeSessionActor {
     pub(super) source_refill_cursor: u8,
     /// Completion of the preceding off-actor receipt write, preserving actor enqueue order.
     pub(super) transcript_receipt_predecessor: Option<tokio::sync::oneshot::Receiver<()>>,
+    /// Opt-in test cleanup custody; never changes production shutdown behavior.
+    #[cfg(test)]
+    pub(super) history_workers_for_tests: Option<super::actor::HistoryWorkerFixture>,
     /// Start of the current continuously non-empty side-effect queue generation.
     pub(super) side_effect_queue_nonempty_since: Option<std::time::Instant>,
     /// Active transaction input leases keyed by exact pane process generation.
